@@ -49,6 +49,15 @@ public class MqttGatewayService extends Service {
         Log.d(TAG, "MqttGatewayService created");
         // 포그라운드 서비스로 전환
         startForegroundServiceWithNotification();
+
+        // 게이트웨이 리스너 등록
+        IMessageListener gatewayListener = new IMessageListener.Stub() {
+            @Override
+            public void onMessage(Message message) {
+                Log.d(TAG, "게이트웨이에서 메시지 수신: " + message.getTopic());
+            }
+        };
+        messagingManager.setGatewayListener(gatewayListener);
     }
 
     private void startForegroundServiceWithNotification() {
@@ -133,19 +142,19 @@ public class MqttGatewayService extends Service {
         }
     }
 
-    private void forwardToInternal(String topic, byte[] payload) {
-        if (messagingManager != null) {
-            try {
-                Message message = new Message(topic, payload, String.valueOf(System.currentTimeMillis()));
-                messagingManager.publish(message);
-                Log.i(TAG, "📡 ✅ Forwarded to internal: " + topic + " (" + payload.length + " bytes)");
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to forward to internal: " + topic, e);
-            }
-        } else {
-            Log.w(TAG, "⚠️ Internal broker not connected, cannot forward: " + topic);
-        }
-    }
+//    private void forwardToInternal(String topic, byte[] payload) {
+//        if (messagingManager != null) {
+//            try {
+//                Message message = new Message(topic, payload, String.valueOf(System.currentTimeMillis()));
+//                messagingManager.publish(message);
+//                Log.i(TAG, "📡 ✅ Forwarded to internal: " + topic + " (" + payload.length + " bytes)");
+//            } catch (Exception e) {
+//                Log.e(TAG, "Failed to forward to internal: " + topic, e);
+//            }
+//        } else {
+//            Log.w(TAG, "⚠️ Internal broker not connected, cannot forward: " + topic);
+//        }
+//    }
 
     public void stop() {
         Log.i(TAG, "🛑 Stopping MQTT Gateway Service");

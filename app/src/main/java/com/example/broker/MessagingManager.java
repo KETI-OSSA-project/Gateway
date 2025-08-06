@@ -14,7 +14,7 @@ public class MessagingManager {
     private Context context;
     private boolean isConnected = false;
     private MessagingServiceConnectionListener connectionListener;
-    private IMessageListener messageListener;
+    private IMessageListener gatewayListener;
 
     public interface MessagingServiceConnectionListener {
         void onConnected();
@@ -32,7 +32,6 @@ public class MessagingManager {
     private void connectToService() {
         Intent intent = new Intent();
         intent.setComponent(new ComponentName("com.example.broker", "com.example.broker.MessagingService"));
-
         boolean bound = context.bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE);
         if (!bound) {
             Log.e(TAG, "Failed to bind to MessagingService");
@@ -44,9 +43,18 @@ public class MessagingManager {
         public void onServiceConnected(ComponentName name, IBinder service) {
             messagingService = IMessagingService.Stub.asInterface(service);
             isConnected = true;
-            Log.d(TAG, "Connected to MessagingService"); // broker 연결됨
+            Log.d(TAG, "Connected to MessagingService");
             if (connectionListener != null) {
                 connectionListener.onConnected();
+            }
+            // 게이트웨이 리스너 등록
+            if (messagingService != null && gatewayListener != null) {
+                try {
+                    messagingService.GatewayListener(gatewayListener);
+                    Log.d(TAG, "GatewayListener registered to MessagingService");
+                } catch (RemoteException e) {
+                    Log.e(TAG, "Error registering GatewayListener", e);
+                }
             }
         }
 
@@ -61,26 +69,22 @@ public class MessagingManager {
         }
     };
 
-    public void publish(Message message) {
-        if (messagingService != null) {
+    // 게이트웨이 리스너만 등록하는 기능만 남김
+    public void setGatewayListener(IMessageListener listener) {
+        Log.d(TAG, "setGatewayListener 호출됨, listener: " + listener);
+        this.gatewayListener = listener;
+        if (messagingService != null && listener != null) {
             try {
-                messagingService.publish(message);
+                Log.d(TAG, "messagingService.GatewayListener(listener) 호출 시도");
+                // AIDL에 정의된 함수 이름과 정확히 일치하도록 호출 (대문자 G)
+                messagingService.GatewayListener(listener);
+                Log.d(TAG, "GatewayListener registered to MessagingService (setGatewayListener 호출됨)");
             } catch (RemoteException e) {
-                Log.e(TAG, "Error publishing message", e);
+                Log.e(TAG, "Error registering GatewayListener", e);
             }
+        } else {
+            Log.d(TAG, "GatewayListener 등록 대기 중: messagingService(" + messagingService + ") 또는 listener(" + listener + ")가 null");
         }
-    }
-
-    public boolean subscribe(IMessageListener listener, Filter filter) {
-        if (messagingService != null) {
-            try {
-                return messagingService.subscribe(listener, filter);
-            } catch (RemoteException e) {
-                Log.e(TAG, "Error subscribing", e);
-                return false;
-            }
-        }
-        return false;
     }
 
     public void disconnect() {
@@ -88,9 +92,5 @@ public class MessagingManager {
             context.unbindService(serviceConnection);
             isConnected = false;
         }
-    }
-
-    public void setMessageListener(IMessageListener listener) {
-        this.messageListener = listener;
     }
 }
