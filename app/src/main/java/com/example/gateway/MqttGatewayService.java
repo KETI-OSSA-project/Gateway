@@ -1,7 +1,11 @@
 package com.example.gateway;
 
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.app.Service;
 import android.content.Intent;
+import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -43,14 +47,35 @@ public class MqttGatewayService extends Service {
         externalConnections = new ConcurrentHashMap<>();
         mainHandler = new Handler(Looper.getMainLooper());
         Log.d(TAG, "MqttGatewayService created");
-        // 추가 초기화 로직 필요시 여기에 작성
+        // 포그라운드 서비스로 전환
+        startForegroundServiceWithNotification();
+    }
+
+    private void startForegroundServiceWithNotification() {
+        String channelId = "gateway_service_channel";
+        String channelName = "Gateway Service Channel";
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel channel = new NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_DEFAULT);
+            NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            if (manager != null) {
+                manager.createNotificationChannel(channel);
+            }
+        }
+        Notification notification = new Notification.Builder(this, channelId)
+                .setContentTitle("Gateway 서비스 동작 중")
+                .setContentText("메시지 브로커와 연결됨")
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .build();
+        startForeground(1, notification);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "MqttGatewayService started");
-        // 서비스 시작 시 필요한 로직 작성
-        // 예: MQTT 연결 시작 등
+        // 내부 브로커 연결만 실행
+        new Thread(() -> {
+            connectToInternalBroker();
+        }).start();
         return START_STICKY;
     }
 
@@ -64,6 +89,10 @@ public class MqttGatewayService extends Service {
     public void onDestroy() {
         super.onDestroy();
         Log.d(TAG, "MqttGatewayService destroyed");
+        // ServiceConnection leak 방지: MessagingManager disconnect 호출
+        if (messagingManager != null) {
+            messagingManager.disconnect();
+        }
         // 리소스 정리 로직 작성
     }
 
@@ -85,103 +114,7 @@ public class MqttGatewayService extends Service {
     }
 
     private void subscribeToOutgoingTopics() {
-        // Subscribe to topics that should be forwarded to external MQTT
-        for (String topic : outgoingTopics) {
-            try {
-                // Broker와 동일한 Builder 패턴 사용
-                Filter filter = new Filter.Builder()
-                    .setTopic(topic)
-                    .build();
-
-                messagingManager.subscribe(new IMessageListener.Stub() {
-                    @Override
-                    public void onMessage(Message message) {
-                        Log.i(TAG, "📤 [OUTGOING] " + message.getTopic() + " -> " + new String(message.getPayload()));
-                        forwardToExternal(message.getTopic(), message.getPayload());
-                    }
-                }, filter);
-
-                Log.d(TAG, "🔔 Subscribed to outgoing topic: " + topic);
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to subscribe to topic: " + topic, e);
-            }
-        }
-    }
-
-    private void connectToExternalBroker() {
-        Log.d(TAG, "🌐 Connecting to external MQTT broker: " + EXTERNAL_BROKER_URL);
-
-        try {
-            MqttClient client = new MqttClient(EXTERNAL_BROKER_URL, CLIENT_ID, new MemoryPersistence());
-
-            MqttConnectOptions options = new MqttConnectOptions();
-            options.setCleanSession(true);
-            options.setConnectionTimeout(10);
-            options.setKeepAliveInterval(20);
-            // 인증이 필요한 경우 추가
-            // options.setUserName("username");
-            // options.setPassword("password".toCharArray());
-
-            client.setCallback(new MqttCallback() {
-                @Override
-                public void connectionLost(Throwable cause) {
-                    Log.e(TAG, "🔌 External MQTT connection lost", cause);
-                    // Attempt to reconnect after 5 seconds
-                    mainHandler.postDelayed(() -> connectToExternalBroker(), 5000);
-                }
-
-                @Override
-                public void messageArrived(String topic, MqttMessage message) {
-                    Log.i(TAG, "📥 [INCOMING] " + topic + " -> " + new String(message.getPayload()));
-                    forwardToInternal(topic, message.getPayload());
-                }
-
-                @Override
-                public void deliveryComplete(IMqttDeliveryToken token) {
-                    Log.d(TAG, "📨 External delivery complete");
-                }
-            });
-
-            client.connect(options);
-            externalConnections.put("main", client);
-
-            Log.i(TAG, "✅ External MQTT broker connected successfully");
-
-            // Subscribe to incoming topics
-            subscribeToIncomingTopics(client);
-
-            // Send test message to confirm connection
-            sendTestMessage(client);
-
-        } catch (Exception e) {
-            Log.e(TAG, "❌ Failed to connect to external MQTT broker", e);
-            // Retry after delay
-            mainHandler.postDelayed(() -> connectToExternalBroker(), 10000);
-        }
-    }
-
-    private void subscribeToIncomingTopics(MqttClient client) {
-        for (String topic : incomingTopics) {
-            try {
-                client.subscribe(topic, 0);
-                Log.d(TAG, "🔔 Subscribed to incoming topic: " + topic);
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to subscribe to external topic: " + topic, e);
-            }
-        }
-    }
-
-    private void sendTestMessage(MqttClient client) {
-        try {
-            String testTopic = "gateway/status";
-            String testPayload = "Azena Gateway Connected at " + System.currentTimeMillis();
-            MqttMessage message = new MqttMessage(testPayload.getBytes());
-            message.setQos(0);
-            client.publish(testTopic, message);
-            Log.i(TAG, "📡 Test message sent: " + testTopic);
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to send test message", e);
-        }
+        // 구독 기능 제거됨
     }
 
     private void forwardToExternal(String topic, byte[] payload) {

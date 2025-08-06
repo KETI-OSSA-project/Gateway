@@ -14,6 +14,7 @@ public class MessagingManager {
     private Context context;
     private boolean isConnected = false;
     private MessagingServiceConnectionListener connectionListener;
+    private IMessageListener messageListener;
 
     public interface MessagingServiceConnectionListener {
         void onConnected();
@@ -43,7 +44,7 @@ public class MessagingManager {
         public void onServiceConnected(ComponentName name, IBinder service) {
             messagingService = IMessagingService.Stub.asInterface(service);
             isConnected = true;
-            Log.d(TAG, "Connected to MessagingService");
+            Log.d(TAG, "Connected to MessagingService"); // broker 연결됨
             if (connectionListener != null) {
                 connectionListener.onConnected();
             }
@@ -87,5 +88,9 @@ public class MessagingManager {
             context.unbindService(serviceConnection);
             isConnected = false;
         }
+    }
+
+    public void setMessageListener(IMessageListener listener) {
+        this.messageListener = listener;
     }
 }
