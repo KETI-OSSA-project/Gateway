@@ -47,6 +47,8 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
+
+    // MQTT 클라이언트 라이브러리 (Android Service 대신 순수 Java 클라이언트 사용)
     implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
-    implementation("org.eclipse.paho:org.eclipse.paho.android.service:1.1.1")
+    // Android Service와 LocalBroadcastManager 의존성 제거
 }
