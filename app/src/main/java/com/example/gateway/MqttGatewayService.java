@@ -25,13 +25,9 @@ import org.eclipse.paho.client.mqttv3.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
 
-/**
- * MQTT Gateway Service that bridges internal broker and external MQTT brokers
- */
+// 외부 MQTT 와 연결하는 코드
 public class MqttGatewayService extends Service {
     private static final String TAG = "GATEWAY";
-
-    // 브로커 서비스 연결 관련
     private IMessagingService messagingService;
     private ServiceConnection brokerConnection;
     private boolean isConnected = false;
@@ -162,6 +158,7 @@ public class MqttGatewayService extends Service {
         }
     }
 
+    // 내부 브로커에서 메시지 수신
     private void registerGatewayListener() {
         if (messagingService != null) {
             try {
