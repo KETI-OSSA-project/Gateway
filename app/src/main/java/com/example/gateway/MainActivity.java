@@ -18,23 +18,22 @@ public class MainActivity extends AppCompatActivity {
 
         // 간단한 레이아웃 생성
         statusText = new TextView(this);
-        statusText.setText("Gateway 시작 중...");
+        statusText.setText("Gateway 시작 중...");  // 화면 UI용
         statusText.setPadding(50, 50, 50, 50);
         setContentView(statusText);
 
-        Log.d(TAG, "🚀 Gateway onCreate 진입");
+        Log.d(TAG, "🚀 Gateway onCreate 진입"); // 로그용
 
-        // Gateway 서비스 시작 (Service로 변경)
+        // Gateway 서비스 시작
         Intent intent = new Intent(this, MqttGatewayService.class);
         startService(intent);
 
-        statusText.setText("Gateway 실행 중\n로그를 확인하세요");
+        statusText.setText("Gateway 실행 중\n로그를 확인하세요");  // 화면 UI용
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        // 서비스 종료 필요시 아래 코드 사용
         Intent intent = new Intent(this, MqttGatewayService.class);
         stopService(intent);
     }
