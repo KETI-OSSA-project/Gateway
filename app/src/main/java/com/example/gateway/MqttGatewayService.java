@@ -4,20 +4,21 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.os.Build;
-import android.os.Handler;
 import android.os.IBinder;
-import android.os.Looper;
+import android.os.RemoteException;
 import android.util.Log;
 
-import com.example.broker.MessagingManager;
+import androidx.core.app.NotificationCompat;
+
 import com.example.broker.Message;
-import com.example.broker.Filter;
 import com.example.broker.IMessageListener;
+import com.example.broker.IMessagingService;
 
 import org.eclipse.paho.client.mqttv3.*;
-import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
@@ -28,32 +29,29 @@ import java.util.Map;
 public class MqttGatewayService extends Service {
     private static final String TAG = "GATEWAY";
 
-    private MessagingManager messagingManager;
+    // 브로커 서비스 연결 관련
+    private IMessagingService messagingService;
+    private ServiceConnection brokerConnection;
+
     private Map<String, MqttClient> externalConnections;
-    private Handler mainHandler;
-
-    // Gateway configuration - PC의 실제 IP 주소 사용
-    private static final String EXTERNAL_BROKER_URL = "tcp://192.168.0.6:1883";
-    private static final String CLIENT_ID = "AzenaGateway_" + System.currentTimeMillis();
-
-    // 실제 브로커 메시지 전달용 토픽만 남김
-    private String[] outgoingTopics = {"sensor/data", "device/status"};
-    private String[] incomingTopics = {"external/command", "external/config"};
 
     @Override
     public void onCreate() {
         super.onCreate();
-        messagingManager = new MessagingManager();
         externalConnections = new ConcurrentHashMap<>();
-        mainHandler = new Handler(Looper.getMainLooper());
         Log.d(TAG, "MqttGatewayService created");
+
         // 포그라운드 서비스로 전환
         startForegroundServiceWithNotification();
+
+        // 브로커 서비스에 바인드
+        connectToBrokerService();
     }
 
     private void startForegroundServiceWithNotification() {
         String channelId = "gateway_service_channel";
         String channelName = "Gateway Service Channel";
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_DEFAULT);
             NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
@@ -61,7 +59,8 @@ public class MqttGatewayService extends Service {
                 manager.createNotificationChannel(channel);
             }
         }
-        Notification notification = new Notification.Builder(this, channelId)
+
+        Notification notification = new NotificationCompat.Builder(this, channelId)
                 .setContentTitle("Gateway 서비스 동작 중")
                 .setContentText("메시지 브로커와 연결됨")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -72,10 +71,6 @@ public class MqttGatewayService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "MqttGatewayService started");
-        // 내부 브로커 연결만 실행
-        new Thread(() -> {
-            connectToInternalBroker();
-        }).start();
         return START_STICKY;
     }
 
@@ -89,34 +84,73 @@ public class MqttGatewayService extends Service {
     public void onDestroy() {
         super.onDestroy();
         Log.d(TAG, "MqttGatewayService destroyed");
-        // ServiceConnection leak 방지: MessagingManager disconnect 호출
-        if (messagingManager != null) {
-            messagingManager.disconnect();
+
+        // 브로커 서비스 연결 해제
+        if (brokerConnection != null) {
+            try {
+                unbindService(brokerConnection);
+            } catch (Exception e) {
+                Log.e(TAG, "Error unbinding broker service", e);
+            }
         }
+
         // 리소스 정리 로직 작성
     }
 
-    private void connectToInternalBroker() {
-        Log.d(TAG, "🔗 Connecting to internal broker...");
+    private void connectToBrokerService() {
+        Log.d(TAG, "🔗 Connecting to broker service...");
 
-        messagingManager = MessagingManager.getConnectedInstance(this, new MessagingManager.MessagingServiceConnectionListener() {
+        brokerConnection = new ServiceConnection() {
             @Override
-            public void onConnected() {
-                Log.i(TAG, "✅ Internal broker connected");
-                subscribeToOutgoingTopics();
+            public void onServiceConnected(ComponentName componentName, IBinder service) {
+                Log.i(TAG, "✅ Broker service connected");
+                messagingService = IMessagingService.Stub.asInterface(service);
+
+                // 게이트웨이 리스너 등록
+                registerGatewayListener();
             }
 
             @Override
-            public void onDisconnected() {
-                Log.w(TAG, "❌ Internal broker disconnected");
+            public void onServiceDisconnected(ComponentName componentName) {
+                Log.w(TAG, "❌ Broker service disconnected");
+                messagingService = null;
             }
-        });
+        };
+
+        // 브로커 앱의 MessagingService에 바인드
+        Intent brokerIntent = new Intent();
+        brokerIntent.setComponent(new ComponentName("com.example.broker", "com.example.broker.MessagingService"));
+
+        boolean bound = bindService(brokerIntent, brokerConnection, BIND_AUTO_CREATE);
+        if (!bound) {
+            Log.e(TAG, "Failed to bind to broker service");
+        }
     }
 
-    private void subscribeToOutgoingTopics() {
-        // 구독 기능 제거됨
+    // 게이트웨이 리스너 등록
+    private void registerGatewayListener() {
+        if (messagingService != null) {
+            try {
+                IMessageListener gatewayListener = new IMessageListener.Stub() {
+                    @Override
+                    public void onMessage(Message message) {
+                        Log.d(TAG, "🔔 게이트웨이에서 브로커 메시지 수신: " + message.getTopic());
+
+                        // 외부 MQTT 브로커로 메시지 전달
+                        forwardToExternal(message.getTopic(), message.getPayload());
+                    }
+                };
+
+                messagingService.GatewayListener(gatewayListener);
+                Log.i(TAG, "✅ Gateway listener registered to broker");
+
+            } catch (RemoteException e) {
+                Log.e(TAG, "Failed to register gateway listener", e);
+            }
+        }
     }
 
+    // 외부 MQTT 브로커로 메시지 전달
     private void forwardToExternal(String topic, byte[] payload) {
         MqttClient client = externalConnections.get("main");
         if (client != null && client.isConnected()) {
@@ -130,20 +164,6 @@ public class MqttGatewayService extends Service {
             }
         } else {
             Log.w(TAG, "⚠️ External client not connected, cannot forward: " + topic);
-        }
-    }
-
-    private void forwardToInternal(String topic, byte[] payload) {
-        if (messagingManager != null) {
-            try {
-                Message message = new Message(topic, payload, String.valueOf(System.currentTimeMillis()));
-                messagingManager.publish(message);
-                Log.i(TAG, "📡 ✅ Forwarded to internal: " + topic + " (" + payload.length + " bytes)");
-            } catch (Exception e) {
-                Log.e(TAG, "Failed to forward to internal: " + topic, e);
-            }
-        } else {
-            Log.w(TAG, "⚠️ Internal broker not connected, cannot forward: " + topic);
         }
     }
 
@@ -163,9 +183,7 @@ public class MqttGatewayService extends Service {
         }
         externalConnections.clear();
 
-        // Disconnect from internal broker
-        if (messagingManager != null) {
-            messagingManager.disconnect();
-        }
+        // 브로커 서비스 연결 해제는 onDestroy에서 처리됨
+        Log.d(TAG, "Gateway service stopped");
     }
 }

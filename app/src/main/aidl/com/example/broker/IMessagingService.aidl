@@ -7,7 +7,6 @@ import com.example.broker.IMessageListener;
 
 /**
  * MQTT Broker Service Interface
- * 다른 앱들이 브로커 서비스에 접근하기 위한 인터페이스
  */
 interface IMessagingService {
     /**
@@ -29,4 +28,10 @@ interface IMessagingService {
      * 클라이언트의 모든 구독을 해제합니다.
      */
     boolean unsubscribeAll(in IMessageListener client);
+
+    /**
+     * 게이트웨이 메시지 리스너를 등록합니다.
+     * subscribe 없이 직접 메시지를 받을 수 있습니다.
+     */
+    void GatewayListener(in IMessageListener listener);
 }
