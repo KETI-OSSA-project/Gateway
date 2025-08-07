@@ -8,7 +8,9 @@ import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.os.Build;
+import android.os.Handler;
 import android.os.IBinder;
+import android.os.Looper;
 import android.os.RemoteException;
 import android.util.Log;
 
@@ -32,6 +34,9 @@ public class MqttGatewayService extends Service {
     // 브로커 서비스 연결 관련
     private IMessagingService messagingService;
     private ServiceConnection brokerConnection;
+    private boolean isConnected = false;
+    private Handler reconnectHandler;
+    private static final long RECONNECT_DELAY = 5000; // 5초 후 재연결 시도
 
     private Map<String, MqttClient> externalConnections;
 
@@ -39,6 +44,7 @@ public class MqttGatewayService extends Service {
     public void onCreate() {
         super.onCreate();
         externalConnections = new ConcurrentHashMap<>();
+        reconnectHandler = new Handler(Looper.getMainLooper());
         Log.d(TAG, "MqttGatewayService created");
 
         // 포그라운드 서비스로 전환
@@ -85,6 +91,11 @@ public class MqttGatewayService extends Service {
         super.onDestroy();
         Log.d(TAG, "MqttGatewayService destroyed");
 
+        // 재연결 스케줄 취소
+        if (reconnectHandler != null) {
+            reconnectHandler.removeCallbacksAndMessages(null);
+        }
+
         // 브로커 서비스 연결 해제
         if (brokerConnection != null) {
             try {
@@ -93,11 +104,14 @@ public class MqttGatewayService extends Service {
                 Log.e(TAG, "Error unbinding broker service", e);
             }
         }
-
-        // 리소스 정리 로직 작성
     }
 
     private void connectToBrokerService() {
+        if (isConnected) {
+            Log.d(TAG, "Already connected to broker service");
+            return;
+        }
+
         Log.d(TAG, "🔗 Connecting to broker service...");
 
         brokerConnection = new ServiceConnection() {
@@ -105,6 +119,7 @@ public class MqttGatewayService extends Service {
             public void onServiceConnected(ComponentName componentName, IBinder service) {
                 Log.i(TAG, "✅ Broker service connected");
                 messagingService = IMessagingService.Stub.asInterface(service);
+                isConnected = true;
 
                 // 게이트웨이 리스너 등록
                 registerGatewayListener();
@@ -114,6 +129,10 @@ public class MqttGatewayService extends Service {
             public void onServiceDisconnected(ComponentName componentName) {
                 Log.w(TAG, "❌ Broker service disconnected");
                 messagingService = null;
+                isConnected = false;
+
+                // 자동 재연결 스케줄링
+                scheduleReconnect();
             }
         };
 
@@ -124,10 +143,25 @@ public class MqttGatewayService extends Service {
         boolean bound = bindService(brokerIntent, brokerConnection, BIND_AUTO_CREATE);
         if (!bound) {
             Log.e(TAG, "Failed to bind to broker service");
+            scheduleReconnect();
         }
     }
 
-    // 게이트웨이 리스너 등록
+    private void scheduleReconnect() {
+        if (reconnectHandler != null) {
+            Log.d(TAG, "⏳ Scheduling reconnect in " + RECONNECT_DELAY + "ms");
+            reconnectHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    if (!isConnected) {
+                        Log.d(TAG, "🔄 Attempting to reconnect to broker service...");
+                        connectToBrokerService();
+                    }
+                }
+            }, RECONNECT_DELAY);
+        }
+    }
+
     private void registerGatewayListener() {
         if (messagingService != null) {
             try {
@@ -146,6 +180,8 @@ public class MqttGatewayService extends Service {
 
             } catch (RemoteException e) {
                 Log.e(TAG, "Failed to register gateway listener", e);
+                isConnected = false;
+                scheduleReconnect();
             }
         }
     }
