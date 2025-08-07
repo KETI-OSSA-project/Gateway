@@ -1,4 +1,4 @@
-package com.skt.tmap.traffic;
+package com.example.broker;
 
 import android.app.Service;
 import android.content.Intent;
@@ -8,6 +8,7 @@ import android.os.RemoteException;
 import com.example.broker.IMessageListener;
 import com.example.broker.Message;
 import com.example.broker.IMessagingService;
+import com.example.broker.Filter;
 
 public class MessagingService extends Service {
     private static final String TAG = "MessagingService";
@@ -21,7 +22,33 @@ public class MessagingService extends Service {
             gatewayListener = listener;
             Log.i(TAG, "GatewayListener 등록됨: " + (listener != null ? listener.asBinder() : "null"));
         }
-        // ...기존 AIDL 메서드 구현들...
+        @Override
+        public void publish(Message message) throws RemoteException {
+            // 현재는 사용하지 않음 - 브로커에서 오는 메시지만 전달
+            Log.w(TAG, "publish 호출됨 - 현재 구현에서는 사용하지 않음");
+        }
+
+        @Override
+        public boolean subscribe(IMessageListener client, Filter filter) throws RemoteException {
+            // 현재는 사용하지 않음 - GatewayListener 방식 사용
+            Log.w(TAG, "subscribe 호출됨 - 현재 구현에서는 GatewayListener 사용");
+            return false;
+        }
+
+        @Override
+        public boolean unsubscribe(IMessageListener client, Filter filter) throws RemoteException {
+            // 현재는 사용하지 않음
+            Log.w(TAG, "unsubscribe 호출됨 - 현재 구현에서는 사용하지 않음");
+            return false;
+        }
+
+        @Override
+        public boolean unsubscribeAll(IMessageListener client) throws RemoteException {
+            // 현재는 사용하지 않음
+            Log.w(TAG, "unsubscribeAll 호출됨 - 현재 구현에서는 사용하지 않음");
+            return false;
+        }
+        //
     };
 
     @Override
@@ -49,5 +76,17 @@ public class MessagingService extends Service {
     }
 
     // AIDL GatewayListener 관련 메서드들
-    // ...existing code...
+    // 브로커에서 메시지를 받아서 등록된 게이트웨이 리스너에게 전달
+    public void forwardMessageToGateway(Message message) {
+        if (gatewayListener != null) {
+            try {
+                gatewayListener.onMessage(message);
+                Log.d(TAG, "게이트웨이로 메시지 전달: " + message.getTopic());
+            } catch (RemoteException e) {
+                Log.e(TAG, "게이트웨이 메시지 전달 실패", e);
+            }
+        } else {
+            Log.w(TAG, "등록된 게이트웨이 리스너가 없음");
+        }
+    }
 }
