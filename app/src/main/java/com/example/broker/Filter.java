@@ -3,7 +3,6 @@ package com.example.broker;
 import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Parcelable;
-import androidx.annotation.NonNull;
 
 /**
  * Filter for message subscription with topic-based filtering.
@@ -22,39 +21,36 @@ public class Filter implements Parcelable {
         }
     };
 
-    private final Bundle bundle;
+    private Bundle criteria;
 
-    /**
-     * @deprecated Use Filter.Builder instead
-     */
-    @Deprecated
-    public Filter(String topic, String publisherId) {
-        this.bundle = new Bundle();
-        if (topic != null) {
-            bundle.putString(Message.TOPIC, topic);
-        }
-        if (publisherId != null) {
-            bundle.putString(Message.PUBLISHER_ID, publisherId);
-        }
-    }
 
     private Filter(Builder builder) {
-        this.bundle = new Bundle();
+        criteria = new Bundle();
         if (builder.topic != null) {
-            bundle.putString(Message.TOPIC, builder.topic);
+            criteria.putString(Message.TOPIC, builder.topic);
         }
         if (builder.publisherId != null) {
-            bundle.putString(Message.PUBLISHER_ID, builder.publisherId);
+            criteria.putString(Message.PUBLISHER_ID, builder.publisherId);
         }
     }
 
     protected Filter(Parcel in) {
-        bundle = in.readBundle(getClass().getClassLoader());
+        criteria = in.readBundle();
     }
 
     @Override
-    public void writeToParcel(Parcel dest, int flags) {
-        dest.writeBundle(bundle);
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+
+        Filter filter = (Filter) o;
+
+        return criteria != null ? criteria.toString().equals(filter.criteria.toString()) : filter.criteria == null;
+    }
+
+    @Override
+    public int hashCode() {
+        return criteria != null ? criteria.toString().hashCode() : 0;
     }
 
     @Override
@@ -62,44 +58,22 @@ public class Filter implements Parcelable {
         return 0;
     }
 
-    public String getTopic() {
-        return bundle.getString(Message.TOPIC);
-    }
-
-    public String getPublisherId() {
-        return bundle.getString(Message.PUBLISHER_ID);
+    @Override
+    public void writeToParcel(Parcel dest, int flags) {
+        dest.writeBundle(criteria);
     }
 
     @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Filter filter = (Filter) o;
-        return bundle.toString().equals(filter.bundle.toString());
-    }
-
-    @Override
-    public int hashCode() {
-        return bundle.toString().hashCode();
+    public String toString() {
+        return "Filter{" + "criteria=" + criteria + '}';
     }
 
     public static class Builder {
         private String topic;
         private String publisherId;
 
-        /**
-         * Public constructor.
-         */
-        public Builder() {
-        }
-
-        public Builder setTopic(@NonNull String topic) {
+        public Builder setTopic(String topic) {
             this.topic = topic;
-            return this;
-        }
-
-        public Builder setPublisherId(String publisherId) {
-            this.publisherId = publisherId;
             return this;
         }
 

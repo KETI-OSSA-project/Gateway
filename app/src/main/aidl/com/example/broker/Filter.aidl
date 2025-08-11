@@ -1,5 +1,6 @@
 // Filter.aidl
 package com.example.broker;
 
-parcelable Filter;
+// 데이터 타입을 정의하는 parcelable 클래스
 
+parcelable Filter;
