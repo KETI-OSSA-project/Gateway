@@ -21,6 +21,7 @@ import com.example.broker.IMessageListener;
 import com.example.broker.IMessagingService;
 
 import org.eclipse.paho.client.mqttv3.*;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
@@ -36,6 +37,10 @@ public class MqttGatewayService extends Service {
 
     private Map<String, MqttClient> externalConnections;
 
+    // 외부 MQTT 브로커 설정
+    private static final String EXTERNAL_BROKER_URL = "tcp://192.168.0.6:1883"; // PC IP 주소로 변경
+    private static final String CLIENT_ID = "AndroidGateway_" + System.currentTimeMillis();
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -45,6 +50,9 @@ public class MqttGatewayService extends Service {
 
         // 포그라운드 서비스로 전환
         startForegroundServiceWithNotification();
+
+        // 외부 MQTT 브로커에 연결
+        connectToExternalMqtt();
 
         // 브로커 서비스에 바인드
         connectToBrokerService();
@@ -102,6 +110,7 @@ public class MqttGatewayService extends Service {
         }
     }
 
+    // 내부 브로커에 게이트웨이 연결
     private void connectToBrokerService() {
         if (isConnected) {
             Log.d(TAG, "Already connected to broker service");
@@ -165,10 +174,24 @@ public class MqttGatewayService extends Service {
                 IMessageListener gatewayListener = new IMessageListener.Stub() {
                     @Override
                     public void onMessage(Message message) {
-                        Log.d(TAG, "🔔 게이트웨이에서 브로커 메시지 수신: " + message.getTopic());
+                        // 디버깅: Message 객체 전체 정보 출력
+                        Log.d(TAG, "📋 Message 전체 정보: " + message.toString());
+                        Log.d(TAG, "📋 getTopic() 결과: " + message.getTopic());
+                        Log.d(TAG, "📋 getTopic() 타입: " + (message.getTopic() != null ? message.getTopic().getClass().getName() : "null"));
+
+                        // topic을 안전하게 문자열로 변환
+                        String topicStr = String.valueOf(message.getTopic());
+
+                        // "java.util.UUID" 문자열이 온 경우 기본 토픽으로 변환
+                        if ("java.util.UUID".equals(topicStr)) {
+                            topicStr = "sensor/data"; // 기본 토픽으로 변환
+                            Log.w(TAG, "⚠️ 브로커에서 잘못된 토픽 수신, 기본 토픽으로 변환: " + topicStr);
+                        }
+
+                        Log.d(TAG, "🔔 게이트웨이에서 브로커 메시지 수신: " + topicStr);
 
                         // 외부 MQTT 브로커로 메시지 전달
-                        forwardToExternal(message.getTopic(), message.getPayload());
+                        forwardToExternal(topicStr, message.getPayload());
                     }
                 };
 
@@ -183,11 +206,17 @@ public class MqttGatewayService extends Service {
         }
     }
 
-    // 외부 MQTT 브로커로 메시지 전달
+    // 외부 MQTT 브로커가 연결됐다면, 메시지 전달
     private void forwardToExternal(String topic, byte[] payload) {
         MqttClient client = externalConnections.get("main");
         if (client != null && client.isConnected()) {
             try {
+                // payload가 null인 경우 빈 배열로 처리
+                if (payload == null) {
+                    payload = new byte[0];
+                    Log.w(TAG, "⚠️ Received null payload, using empty byte array instead");
+                }
+
                 MqttMessage message = new MqttMessage(payload);
                 message.setQos(0);
                 client.publish(topic, message);
@@ -197,6 +226,47 @@ public class MqttGatewayService extends Service {
             }
         } else {
             Log.w(TAG, "⚠️ External client not connected, cannot forward: " + topic);
+        }
+    }
+
+    // 외부 MQTT 브로커 연결
+    private void connectToExternalMqtt() {
+        try {
+            Log.d(TAG, "🌐 Connecting to external MQTT broker: " + EXTERNAL_BROKER_URL);
+
+            // 파일 대신 메모리 퍼시스턴스 사용
+            MqttClient client = new MqttClient(EXTERNAL_BROKER_URL, CLIENT_ID, new MemoryPersistence());
+
+            MqttConnectOptions options = new MqttConnectOptions();
+            options.setAutomaticReconnect(true);
+            options.setCleanSession(true);
+            options.setKeepAliveInterval(30);
+            options.setConnectionTimeout(10);
+
+            client.setCallback(new MqttCallback() {
+                @Override
+                public void connectionLost(Throwable cause) {
+                    Log.w(TAG, "❌ External MQTT connection lost", cause);
+                }
+
+                @Override
+                public void messageArrived(String topic, MqttMessage message) throws Exception {
+                    Log.d(TAG, "📨 Received from external MQTT: " + topic);
+                    // 외부에서 오는 메시지는 현재 구현에서 사용하지 않음 (단방향 전달)
+                }
+
+                @Override
+                public void deliveryComplete(IMqttDeliveryToken token) {
+                    Log.d(TAG, "📤 Message delivered to external MQTT");
+                }
+            });
+
+            client.connect(options);
+            externalConnections.put("main", client);
+            Log.i(TAG, "✅ Connected to external MQTT broker");
+
+        } catch (Exception e) {
+            Log.e(TAG, "❌ Failed to connect to external MQTT broker", e);
         }
     }
 
