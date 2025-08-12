@@ -229,44 +229,71 @@ public class MqttGatewayService extends Service {
         }
     }
 
-    // 외부 MQTT 브로커 연결
+    // 외부 MQTT 브로커 연결 부분만 백그라운드 스레드에서 실행
     private void connectToExternalMqtt() {
-        try {
-            Log.d(TAG, "🌐 Connecting to external MQTT broker: " + EXTERNAL_BROKER_URL);
+        new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    Log.d(TAG, "🌐 Connecting to external MQTT broker: " + EXTERNAL_BROKER_URL);
 
-            // 파일 대신 메모리 퍼시스턴스 사용
-            MqttClient client = new MqttClient(EXTERNAL_BROKER_URL, CLIENT_ID, new MemoryPersistence());
+                    // 파일 대신 메모리 퍼시스턴스 사용
+                    MqttClient client = new MqttClient(EXTERNAL_BROKER_URL, CLIENT_ID, new MemoryPersistence());
 
-            MqttConnectOptions options = new MqttConnectOptions();
-            options.setAutomaticReconnect(true);
-            options.setCleanSession(true);
-            options.setKeepAliveInterval(30);
-            options.setConnectionTimeout(10);
+                    MqttConnectOptions options = new MqttConnectOptions();
+                    options.setAutomaticReconnect(true);
+                    options.setCleanSession(true);
+                    options.setKeepAliveInterval(30);
+                    options.setConnectionTimeout(10); // 타임아웃을 10초로 설정
 
-            client.setCallback(new MqttCallback() {
-                @Override
-                public void connectionLost(Throwable cause) {
-                    Log.w(TAG, "❌ External MQTT connection lost", cause);
+                    client.setCallback(new MqttCallback() {
+                        @Override
+                        public void connectionLost(Throwable cause) {
+                            Log.w(TAG, "❌ External MQTT connection lost", cause);
+                            // 연결이 끊어지면 재연결 시도
+                            scheduleExternalReconnect();
+                        }
+
+                        @Override
+                        public void messageArrived(String topic, MqttMessage message) throws Exception {
+                            Log.d(TAG, "📨 Received from external MQTT: " + topic);
+                            // 외부에서 오는 메시지는 현재 구현에서 사용하지 않음 (단방향 전달)
+                        }
+
+                        @Override
+                        public void deliveryComplete(IMqttDeliveryToken token) {
+                            Log.d(TAG, "📤 Message delivered to external MQTT");
+                        }
+                    });
+
+                    client.connect(options);
+                    externalConnections.put("main", client);
+                    Log.i(TAG, "✅ Connected to external MQTT broker");
+
+                } catch (Exception e) {
+                    Log.e(TAG, "❌ Failed to connect to external MQTT broker", e);
+                    // 연결 실패시 재연결 시도
+                    scheduleExternalReconnect();
                 }
+            }
+        }).start();
+    }
 
+    // 외부 MQTT 브로커 재연결 스케줄링
+    private void scheduleExternalReconnect() {
+        if (reconnectHandler != null) {
+            Log.d(TAG, "⏳ Scheduling external MQTT reconnect in " + RECONNECT_DELAY + "ms");
+            reconnectHandler.postDelayed(new Runnable() {
                 @Override
-                public void messageArrived(String topic, MqttMessage message) throws Exception {
-                    Log.d(TAG, "📨 Received from external MQTT: " + topic);
-                    // 외부에서 오는 메시지는 현재 구현에서 사용하지 않음 (단방향 전달)
+                public void run() {
+                    // 현재 연결이 없거나 끊어진 경우에만 재연결
+                    MqttClient client = externalConnections.get("main");
+                    if (client == null || !client.isConnected()) {
+                        Log.d(TAG, "🔄 Attempting to reconnect to external MQTT broker...");
+                        connectToExternalMqtt();
+                    }
                 }
-
-                @Override
-                public void deliveryComplete(IMqttDeliveryToken token) {
-                    Log.d(TAG, "📤 Message delivered to external MQTT");
-                }
-            });
-
-            client.connect(options);
-            externalConnections.put("main", client);
-            Log.i(TAG, "✅ Connected to external MQTT broker");
-
-        } catch (Exception e) {
-            Log.e(TAG, "❌ Failed to connect to external MQTT broker", e);
+            }, RECONNECT_DELAY);
         }
     }
 
