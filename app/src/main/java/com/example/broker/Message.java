@@ -24,6 +24,10 @@ public class Message implements Parcelable {
     private long timestamp;
     private Bundle headers;
 
+    // 브로커 전용 필드들 (읽기 위해서만 필요)
+    private String responseTopic;
+    private byte[] correlationData;
+
     // 기본 생성자
     public Message() {
         this.id = UUID.randomUUID();
@@ -39,46 +43,54 @@ public class Message implements Parcelable {
         Log.d(TAG, "Creating message with topic: " + topic + " (type: " + (topic != null ? topic.getClass().getSimpleName() : "null") + ")");
     }
 
-    // Parcelable 생성자
+    // Parcelable 생성자 - 브로커 포맷에 맞춤
     protected Message(Parcel in) {
-        Log.d(TAG, "Reading message from parcel");
+        Log.d(TAG, "Reading message from parcel (BROKER FORMAT)");
 
-        String uuidString = in.readString();
-        Log.d(TAG, "Read UUID string from parcel: " + uuidString);
-
-        // UUID 문자열이 유효하지 않을 경우 새로 생성
+        // 1) UUID는 Serializable로 써졌음
         try {
-            if (uuidString != null && !uuidString.equals("java.util.UUID") && !uuidString.isEmpty()) {
-                this.id = UUID.fromString(uuidString);
+            Object uuidObj = in.readSerializable();
+            if (uuidObj instanceof UUID) {
+                this.id = (UUID) uuidObj;
+                Log.d(TAG, "Read UUID from parcel: " + this.id);
             } else {
                 this.id = UUID.randomUUID();
-                Log.w(TAG, "Invalid UUID string received: '" + uuidString + "', generating new UUID: " + this.id);
-            }
-        } catch (IllegalArgumentException e) {
-            this.id = UUID.randomUUID();
-            Log.e(TAG, "Failed to parse UUID string: '" + uuidString + "', generating new UUID: " + this.id, e);
-        }
-
-        this.topic = in.readString();
-        Log.d(TAG, "Read topic from parcel: " + this.topic + " (type: " + (this.topic != null ? this.topic.getClass().getSimpleName() : "null") + ")");
-
-        this.payload = in.createByteArray();
-        this.timestamp = in.readLong();
-
-        // Bundle 역직렬화를 더 안전하게 처리
-        try {
-            int hasHeaders = in.readInt(); // headers 존재 플래그
-            if (hasHeaders == 1) {
-                this.headers = in.readBundle(getClass().getClassLoader());
-                Log.d(TAG, "Read headers bundle with " + (headers != null ? headers.size() : 0) + " entries");
-            } else {
-                this.headers = new Bundle();
-                Log.d(TAG, "Read empty headers flag, created new Bundle");
+                Log.w(TAG, "Invalid UUID object, generated new: " + this.id);
             }
         } catch (Exception e) {
-            Log.e(TAG, "Failed to read headers bundle, creating empty Bundle", e);
-            this.headers = new Bundle(); // 실패 시 빈 Bundle 생성
+            this.id = UUID.randomUUID();
+            Log.e(TAG, "Failed to read UUID, generated new: " + this.id, e);
         }
+
+        // 2) Bundle (topic 등)
+        try {
+            this.headers = in.readBundle(getClass().getClassLoader());
+            if (this.headers == null) {
+                this.headers = new Bundle();
+            }
+
+            // 브로커는 topic을 Bundle에 넣음
+            this.topic = headers.getString(TOPIC);
+            Log.d(TAG, "Read topic from bundle: " + this.topic);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to read headers bundle", e);
+            this.headers = new Bundle();
+            this.topic = null;
+        }
+
+        // 3) payload
+        this.payload = in.createByteArray();
+        Log.d(TAG, "Read payload: " + (payload != null ? payload.length : 0) + " bytes");
+
+        // 4) responseTopic (브로커만 사용, 읽고 버림)
+        this.responseTopic = in.readString();
+
+        // 5) correlationData (브로커만 사용, 읽고 버림)
+        this.correlationData = in.createByteArray();
+
+        // 6) timestamp
+        this.timestamp = in.readLong();
+        Log.d(TAG, "Read timestamp: " + this.timestamp);
     }
 
     public static final Creator<Message> CREATOR = new Creator<Message>() {
@@ -135,27 +147,21 @@ public class Message implements Parcelable {
 
     @Override
     public void writeToParcel(Parcel dest, int flags) {
-        Log.d(TAG, "Writing message to parcel - topic: " + topic);
+        Log.d(TAG, "Writing message to parcel (BROKER FORMAT) - topic: " + topic);
 
-        dest.writeString(id != null ? id.toString() : null);
-        dest.writeString(topic);
-        dest.writeByteArray(payload);
-        dest.writeLong(timestamp);
+        // topic을 브로커가 Bundle에서 꺼내므로 headers에 넣어둠
+        if (headers == null) headers = new Bundle();
+        if (topic != null) headers.putString(TOPIC, topic);
 
-        // Bundle 직렬화를 더 안전하게 처리
-        try {
-            if (headers != null && !headers.isEmpty()) {
-                dest.writeInt(1); // headers 존재 플래그
-                dest.writeBundle(headers);
-                Log.d(TAG, "Written headers bundle with " + headers.size() + " entries");
-            } else {
-                dest.writeInt(0); // headers 없음 플래그
-                Log.d(TAG, "Written empty headers flag");
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Failed to write headers bundle, writing empty flag instead", e);
-            dest.writeInt(0); // 실패 시 빈 Bundle로 처리
-        }
+        // 브로커 포맷에 맞춰 쓰기
+        dest.writeSerializable(id);              // 1) UUID 객체
+        dest.writeBundle(headers);               // 2) Bundle (topic 포함)
+        dest.writeByteArray(payload);            // 3) payload
+        dest.writeString(responseTopic);         // 4) responseTopic (null이어도 OK)
+        dest.writeByteArray(correlationData);    // 5) correlationData (null이어도 OK)
+        dest.writeLong(timestamp);               // 6) timestamp
+
+        Log.d(TAG, "Written message to parcel successfully");
     }
 
     @Override
