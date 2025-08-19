@@ -29,21 +29,23 @@ import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
 
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 public class MqttGatewayService extends Service {
     private static final String TAG = "GATEWAY";
 
     // ===== 외부 브로커 접속 설정 =====
-    // 디바이스에서 PC로 붙을 때는 PC의 실제 IP로 바꿔주세요.
+    // 디바이스에서 PC로 붙을 때는 PC의 실제 IP로 바꿔야 함.
     private static final String EXTERNAL_BROKER_URL = "tcp://192.168.0.6:1883";
-    private static final String CLIENT_ID_MAIN = "AndroidGateway_" + System.currentTimeMillis();
 
     // ===== 재연결 설정 =====
     private static final long RECONNECT_DELAY = 5000L; // 5초
+    private static final long MAX_RECONNECT_DELAY = 60000L; // 최대 60초
+    private int uplinkReconnectAttempts = 0;
+    private int downlinkReconnectAttempts = 0;
 
     private IMessagingService messagingService;
     private ServiceConnection brokerConnection;
@@ -51,12 +53,44 @@ public class MqttGatewayService extends Service {
 
     private Handler reconnectHandler;
     private final Map<String, MqttClient> externalConnections = new ConcurrentHashMap<>();
+    private final ExecutorService connectionExecutor = Executors.newFixedThreadPool(2);
 
     // ===== 무한 루프 방지를 위한 메시지 캐시 =====
     private final Set<String> processedMessages = ConcurrentHashMap.newKeySet();
-    private final Set<String> externalOriginMessages = ConcurrentHashMap.newKeySet(); // 외부에서 온 메시지 추적
-    private final Set<String> selfPublishedMessages = ConcurrentHashMap.newKeySet(); // 자기가 발행한 메시지 추적
-    private static final int MAX_CACHE_SIZE = 1000; // 최대 캐시 크기
+    private final Set<String> externalOriginMessages = ConcurrentHashMap.newKeySet();
+    private final Set<String> selfPublishedMessages = ConcurrentHashMap.newKeySet();
+    private static final int MAX_CACHE_SIZE = 1000;
+
+    // ===== 설정 모델 도입 =====
+    private static class GatewayConfig {
+        String externalBrokerUrl;
+        String uplinkPattern;
+        String downlinkPattern;
+        String internalOutAllow;
+
+        // 패턴 캐싱
+        private Pattern compiledUplinkPattern;
+        private Pattern compiledDownlinkPattern;
+        private Pattern compiledInternalOutPattern;
+
+        void compilePatterns() {
+            if (uplinkPattern != null) {
+                compiledUplinkPattern = compileTopicPattern(uplinkPattern);
+            }
+            if (downlinkPattern != null) {
+                compiledDownlinkPattern = compileTopicPattern(downlinkPattern);
+            }
+            if (internalOutAllow != null) {
+                compiledInternalOutPattern = compileTopicPattern(internalOutAllow);
+            }
+        }
+
+        private Pattern compileTopicPattern(String pattern) {
+            String regex = "^" + pattern.replace(".", "\\.").replace("+", "[^/]+") + "$";
+            return Pattern.compile(regex);
+        }
+    }
+    private GatewayConfig config;
 
     @Override
     public void onCreate() {
@@ -66,11 +100,11 @@ public class MqttGatewayService extends Service {
 
         startForegroundServiceWithNotification();
 
-        // 내부 브로커 바인드
-        connectToBrokerService();
+        // 설정 로드 (SharedPreferences에서)
+        config = loadConfigFromPreferences();
 
-        // 내부→외부 전송용 외부 MQTT 연결
-        connectToExternalMqtt();
+        // 내부 브로커 바인드 (연결 후 applyConfig 호출)
+        connectToBrokerService();
     }
 
     private void startForegroundServiceWithNotification() {
@@ -92,8 +126,37 @@ public class MqttGatewayService extends Service {
         startForeground(1, notification);
     }
 
-    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
         Log.d(TAG, "MqttGatewayService started");
+
+        // Intent에서 설정 업데이트가 있는지 확인
+        if (intent != null && intent.hasExtra("brokerUrl")) {
+            GatewayConfig newConfig = new GatewayConfig();
+            newConfig.externalBrokerUrl = intent.getStringExtra("brokerUrl");
+            newConfig.uplinkPattern = intent.getStringExtra("uplinkPattern");
+            newConfig.downlinkPattern = intent.getStringExtra("downlinkPattern");
+            newConfig.internalOutAllow = intent.getStringExtra("internalAllow");
+
+            // 빈 문자열을 null로 변환
+            if (newConfig.internalOutAllow != null && newConfig.internalOutAllow.trim().isEmpty()) {
+                newConfig.internalOutAllow = null;
+            }
+
+            newConfig.compilePatterns();
+
+            // 설정이 변경되었으면 적용
+            if (!configEquals(config, newConfig)) {
+                Log.i(TAG, "🔧 설정 변경 감지, 재적용");
+                config = newConfig;
+                saveConfigToPreferences(config);
+
+                if (isConnected) {
+                    applyConfig(config);
+                }
+            }
+        }
+
         return START_STICKY;
     }
 
@@ -105,6 +168,7 @@ public class MqttGatewayService extends Service {
         Log.d(TAG, "MqttGatewayService destroyed");
 
         if (reconnectHandler != null) reconnectHandler.removeCallbacksAndMessages(null);
+        if (connectionExecutor != null) connectionExecutor.shutdown();
 
         if (brokerConnection != null) {
             try { unbindService(brokerConnection); } catch (Exception e) { Log.e(TAG, "Error unbinding", e); }
@@ -114,6 +178,152 @@ public class MqttGatewayService extends Service {
             try { if (c.isConnected()) c.disconnect(); c.close(); } catch (Exception ignored) {}
         }
         externalConnections.clear();
+    }
+
+    // ===== 설정 로딩 (SharedPreferences 기반) =====
+    private GatewayConfig loadConfigFromPreferences() {
+        android.content.SharedPreferences prefs = getSharedPreferences("GatewayConfig", MODE_PRIVATE);
+
+        GatewayConfig cfg = new GatewayConfig();
+        cfg.externalBrokerUrl = prefs.getString("brokerUrl", EXTERNAL_BROKER_URL);
+        cfg.uplinkPattern = prefs.getString("uplinkPattern", "app/+/out");
+        cfg.downlinkPattern = prefs.getString("downlinkPattern", "downlink/app/+/in");
+        cfg.internalOutAllow = prefs.getString("internalAllow", "app/+/out");
+
+        // 빈 문자열을 null로 변환
+        if (cfg.internalOutAllow != null && cfg.internalOutAllow.trim().isEmpty()) {
+            cfg.internalOutAllow = null;
+        }
+
+        cfg.compilePatterns();
+        Log.i(TAG, "📋 설정 로드: " + cfg.externalBrokerUrl + ", uplink=" + cfg.uplinkPattern + ", downlink=" + cfg.downlinkPattern);
+        return cfg;
+    }
+
+    private void saveConfigToPreferences(GatewayConfig cfg) {
+        android.content.SharedPreferences.Editor editor = getSharedPreferences("GatewayConfig", MODE_PRIVATE).edit();
+        editor.putString("brokerUrl", cfg.externalBrokerUrl);
+        editor.putString("uplinkPattern", cfg.uplinkPattern);
+        editor.putString("downlinkPattern", cfg.downlinkPattern);
+        editor.putString("internalAllow", cfg.internalOutAllow != null ? cfg.internalOutAllow : "");
+        editor.apply();
+    }
+
+    private boolean configEquals(GatewayConfig a, GatewayConfig b) {
+        if (a == null || b == null) return false;
+        return java.util.Objects.equals(a.externalBrokerUrl, b.externalBrokerUrl) &&
+               java.util.Objects.equals(a.uplinkPattern, b.uplinkPattern) &&
+               java.util.Objects.equals(a.downlinkPattern, b.downlinkPattern) &&
+               java.util.Objects.equals(a.internalOutAllow, b.internalOutAllow);
+    }
+
+    // ===== 설정 적용 =====
+    private synchronized void applyConfig(GatewayConfig cfg) {
+        Log.i(TAG, "🔧 Applying config");
+        teardownExternalConnections();
+        connectExternalForUplink(cfg);
+        connectExternalForDownlink(cfg);
+    }
+
+    private void teardownExternalConnections() {
+        for (MqttClient c : externalConnections.values()) {
+            try { if (c.isConnected()) c.disconnect(); c.close(); } catch (Exception ignored) {}
+        }
+        externalConnections.clear();
+    }
+
+    // 내부 -> 외부 (uplink)
+    private void connectExternalForUplink(GatewayConfig cfg) {
+        connectionExecutor.execute(() -> {
+            try {
+                String id = "AndroidGateway_Uplink_" + System.currentTimeMillis();
+                Log.d(TAG, "🌐 Connecting uplink: " + cfg.externalBrokerUrl);
+                MqttClient up = new MqttClient(cfg.externalBrokerUrl, id, new MemoryPersistence());
+                MqttConnectOptions opt = new MqttConnectOptions();
+                opt.setAutomaticReconnect(true);
+                opt.setCleanSession(true);
+                opt.setKeepAliveInterval(30);
+                opt.setConnectionTimeout(10);
+                up.setCallback(new MqttCallback() {
+                    @Override public void connectionLost(Throwable cause) {
+                        Log.w(TAG, "❌ Uplink lost", cause);
+                        scheduleUplinkReconnect();
+                    }
+                    @Override public void messageArrived(String topic, MqttMessage message) { /* publish-only */ }
+                    @Override public void deliveryComplete(IMqttDeliveryToken token) { }
+                });
+                up.connect(opt);
+                MqttClient old = externalConnections.put("uplink", up);
+                if (old != null) { try { if (old.isConnected()) old.disconnect(); old.close(); } catch (Exception ignored) {} }
+                uplinkReconnectAttempts = 0; // 성공 시 리셋
+                Log.i(TAG, "✅ Uplink connected (publish-only)");
+            } catch (Exception e) {
+                Log.e(TAG, "❌ Uplink connect failed", e);
+                scheduleUplinkReconnect();
+            }
+        });
+    }
+    // 외부 -> 내부 (downlink)
+    private void connectExternalForDownlink(GatewayConfig cfg) {
+        connectionExecutor.execute(() -> {
+            try {
+                String id = "AndroidGateway_Downlink_" + System.currentTimeMillis();
+                Log.d(TAG, "🌐 Connecting downlink: " + cfg.externalBrokerUrl);
+                MqttClient down = new MqttClient(cfg.externalBrokerUrl, id, new MemoryPersistence());
+                MqttConnectOptions opt = new MqttConnectOptions();
+                opt.setAutomaticReconnect(true);
+                opt.setCleanSession(true);
+                opt.setKeepAliveInterval(30);
+                opt.setConnectionTimeout(10);
+                down.setCallback(new MqttCallback() {
+                    @Override public void connectionLost(Throwable cause) {
+                        Log.w(TAG, "❌ Downlink lost", cause);
+                        scheduleDownlinkReconnect();
+                    }
+                    @Override public void messageArrived(String topic, MqttMessage mqttMessage) {
+                        if (!topicMatches(config.compiledDownlinkPattern, topic)) {
+                            Log.d(TAG, "skip external(not allowed): " + topic);
+                            return;
+                        }
+                        String internal = mapDownlinkToInternal(topic);
+                        forwardToInternal(internal, mqttMessage.getPayload());
+                    }
+                    @Override public void deliveryComplete(IMqttDeliveryToken token) { }
+                });
+                down.connect(opt);
+                down.subscribe(config.downlinkPattern, 1);
+                MqttClient old = externalConnections.put("downlink", down);
+                if (old != null) { try { if (old.isConnected()) old.disconnect(); old.close(); } catch (Exception ignored) {} }
+                downlinkReconnectAttempts = 0; // 성공 시 리셋
+                Log.i(TAG, "✅ Downlink connected & subscribed: " + config.downlinkPattern);
+            } catch (Exception e) {
+                Log.e(TAG, "❌ Downlink connect failed", e);
+                scheduleDownlinkReconnect();
+            }
+        });
+    }
+
+    // 재연결 관리하는 코드들
+    private void scheduleUplinkReconnect() {
+        if (reconnectHandler == null) return;
+        long delay = Math.min(RECONNECT_DELAY * (1L << uplinkReconnectAttempts), MAX_RECONNECT_DELAY);
+        uplinkReconnectAttempts++;
+        Log.d(TAG, "⏳ Scheduling uplink reconnect in " + delay + "ms (attempt " + uplinkReconnectAttempts + ")");
+        reconnectHandler.postDelayed(() -> {
+            MqttClient c = externalConnections.get("uplink");
+            if (c == null || !c.isConnected()) connectExternalForUplink(config);
+        }, delay);
+    }
+
+    private void scheduleDownlinkReconnect() {
+        if (reconnectHandler == null) return;
+        long delay = Math.min(RECONNECT_DELAY * (1L << downlinkReconnectAttempts), MAX_RECONNECT_DELAY);
+        downlinkReconnectAttempts++;
+        Log.d(TAG, "⏳ Scheduling downlink reconnect in " + delay + "ms (attempt " + downlinkReconnectAttempts + ")");
+        reconnectHandler.postDelayed(() -> {
+            MqttClient c = externalConnections.get("downlink");
+            if (c == null || !c.isConnected()) connectExternalForDownlink(config);
+        }, delay);
     }
 
     // ===== 내부 브로커 바인딩 =====
@@ -128,11 +338,12 @@ public class MqttGatewayService extends Service {
                 messagingService = IMessagingService.Stub.asInterface(service);
                 isConnected = true;
 
-                // 내부→외부 포워딩 리스너 등록
+                // 내부→외부 시작
                 registerGatewayListener();
 
-                // 외부→내부 전달 시작
-                startExternalToInternalBridge();
+                // 외부→내부 시작
+                // startExternalToInternalBridge(); // 제거됨
+                applyConfig(config);       // uplink / downlink 연결
             }
 
             @Override public void onServiceDisconnected(ComponentName name) {
@@ -192,31 +403,19 @@ public class MqttGatewayService extends Service {
             IMessageListener gatewayListener = new IMessageListener.Stub() {
                 @Override public void onMessage(Message message) throws RemoteException {
                     String topic = message.getTopic();
-                    if (topic == null) {
-                        Log.w(TAG, "drop: null topic from internal");
+                    if (topic == null) return;
+
+                    if (config.compiledInternalOutPattern != null &&
+                        !topicMatches(config.compiledInternalOutPattern, topic)) {
+                        Log.d(TAG, "skip internal(not allowed): " + topic);
                         return;
                     }
-
-                    // 외부에서 온 메시지인지 확인
-                    String messageKey = generateMessageKey(topic, message.getPayload());
-                    if (externalOriginMessages.contains(messageKey)) {
-                        Log.d(TAG, "🚫 Skip forwarding external-origin message back to external: " + topic);
-                        // 외부 출처 메시지 캐시에서 제거 (처리 완료)
-                        externalOriginMessages.remove(messageKey);
-                        return;
-                    }
-
-                    // 내부에서 발생한 메시지만 외부로 전달
-                    Log.d(TAG, "Forward to external: " + topic);
-                    forwardToExternal(topic, message.getPayload());
+                    String outTopic = mapInternalToUplink(topic);
+                    forwardToExternal(outTopic, message.getPayload());
                 }
             };
-
-            // ❗ AIDL 메서드명은 프로젝트에 맞춰주세요.
-            // 예: messagingService.registerGatewayListener(gatewayListener);
             messagingService.GatewayListener(gatewayListener);
-
-            Log.i(TAG, "✅ Gateway listener registered to broker");
+            Log.i(TAG, "✅ Gateway listener registered");
         } catch (RemoteException e) {
             Log.e(TAG, "Failed to register gateway listener", e);
             isConnected = false;
@@ -226,152 +425,48 @@ public class MqttGatewayService extends Service {
 
     // mqtt와 게이트웨이 간 통신 담당하는 코드
     private void forwardToExternal(String topic, byte[] payload) {
-        // 중복 메시지 방지 체크
         String messageKey = generateMessageKey(topic, payload);
-        if (isAlreadyProcessed(messageKey)) {
-            Log.d(TAG, "🔄 Skip duplicate message to external: " + topic);
-            return;
-        }
+        if (isAlreadyProcessed(messageKey)) return;
 
         // 자기가 발행할 메시지임을 표시
         selfPublishedMessages.add(messageKey);
 
-        MqttClient client = externalConnections.get("main");
+        MqttClient client = externalConnections.get("uplink");
         if (client == null || !client.isConnected()) {
-            Log.w(TAG, "⚠️ External client not connected, cannot forward: " + topic);
+            Log.w(TAG, "uplink not connected: " + topic);
             return;
         }
         try {
             if (payload == null) payload = new byte[0];
             MqttMessage out = new MqttMessage(payload);
-            out.setQos(1);      // 고정값(변환 아님)
-            out.setRetained(false);
-            client.publish(topic, out); // publish 로 메시지 발행함 -> mqtt와는 p/s 프로토콜로 메시지를 받을 수 있기 때문에.. 단순히 리스너로는 불가능함
-            // 한 번만 로그 출력
-            Log.i(TAG, "📡 ✅ Forwarded to external: " + topic + " (" + payload.length + " bytes)");
+            out.setQos(1); out.setRetained(false);
+            client.publish(topic, out);
+            Log.i(TAG, "📡 → external(uplink): " + topic);
         } catch (Exception e) {
-            Log.e(TAG, "Failed to forward to external: " + topic, e);
+            Log.e(TAG, "forwardToExternal error: " + topic, e);
         }
     }
 
-    // ===== 외부 브로커 접속(내부→외부 전송용) =====
-    private void connectToExternalMqtt() {
-        new Thread(() -> {
-            try {
-                Log.d(TAG, "🌐 Connecting to external MQTT (main): " + EXTERNAL_BROKER_URL);
-                MqttClient client = new MqttClient(EXTERNAL_BROKER_URL, CLIENT_ID_MAIN, new MemoryPersistence());
-
-                MqttConnectOptions options = new MqttConnectOptions();
-                options.setAutomaticReconnect(true);
-                options.setCleanSession(true);
-                options.setKeepAliveInterval(30);
-                options.setConnectionTimeout(10);
-
-                client.setCallback(new MqttCallback() {
-                    @Override public void connectionLost(Throwable cause) {
-                        Log.w(TAG, "❌ External(main) connection lost", cause);
-                        scheduleExternalReconnect();
-                    }
-                    @Override public void messageArrived(String topic, MqttMessage message) { /* not used here */ }
-                    @Override public void deliveryComplete(IMqttDeliveryToken token) {
-                        // deliveryComplete 로그 제거 - forwardToExternal에서 이미 출력함
-                    }
-                });
-
-                client.connect(options);
-
-                // 기존 클라이언트 정리 후 교체
-                MqttClient old = externalConnections.put("main", client);
-                if (old != null) {
-                    try { if (old.isConnected()) old.disconnect(); old.close(); } catch (Exception ignored) {}
-                }
-                Log.i(TAG, "✅ Connected to external MQTT (main)");
-            } catch (Exception e) {
-                Log.e(TAG, "❌ Failed to connect external MQTT (main)", e);
-                scheduleExternalReconnect();
-            }
-        }).start();
+    // ===== 토픽 유틸 (패턴 캐싱 버전) =====
+    private boolean topicMatches(Pattern compiledPattern, String topic) {
+        if (compiledPattern == null || topic == null) return false;
+        return compiledPattern.matcher(topic).matches();
     }
 
-    private void scheduleExternalReconnect() {
-        if (reconnectHandler == null) return;
-        Log.d(TAG, "⏳ Scheduling external MQTT reconnect in " + RECONNECT_DELAY + "ms");
-        reconnectHandler.postDelayed(() -> {
-            MqttClient c = externalConnections.get("main");
-            if (c == null || !c.isConnected()) {
-                Log.d(TAG, "🔄 Attempting to reconnect to external MQTT (main)...");
-                connectToExternalMqtt();
-            }
-        }, RECONNECT_DELAY);
-    }
-
-    // ===== 외부→내부: 외부 MQTT의 모든 메시지를 내부로 전달 =====
-    private void startExternalToInternalBridge() {
-        if (messagingService == null) {
-            Log.w(TAG, "⚠️ Cannot start external→internal bridge - messaging service not available");
-            return;
+    private String mapInternalToUplink(String internalTopic) {
+        if (config.compiledUplinkPattern == null ||
+            !topicMatches(config.compiledUplinkPattern, internalTopic)) {
+            return internalTopic;
         }
+        return internalTopic.replaceFirst("^app/", "uplink/app/");
+    }
 
-        new Thread(() -> {
-            try {
-                Log.d(TAG, "🌐 Starting external→internal bridge...");
-
-                String inboundClientId = "AndroidGateway_Inbound_" + System.currentTimeMillis();
-                MqttClient inboundClient = new MqttClient(EXTERNAL_BROKER_URL, inboundClientId, new MemoryPersistence());
-
-                MqttConnectOptions options = new MqttConnectOptions();
-                options.setAutomaticReconnect(true);
-                options.setCleanSession(true);
-                options.setKeepAliveInterval(30);
-                options.setConnectionTimeout(10);
-
-                inboundClient.setCallback(new MqttCallback() {
-                    @Override public void connectionLost(Throwable cause) {
-                        Log.w(TAG, "❌ External→internal connection lost", cause);
-                    }
-
-                    @Override public void messageArrived(String topic, MqttMessage mqttMessage) {
-                        String messageKey = generateMessageKey(topic, mqttMessage.getPayload());
-
-                        // 자기가 발행한 메시지인지 확인
-                        if (selfPublishedMessages.contains(messageKey)) {
-                            Log.d(TAG, "🚫 Skip self-published message from external: " + topic);
-                            selfPublishedMessages.remove(messageKey); // 처리 완료된 메시지 제거
-                            return;
-                        }
-
-                        // 중복 메시지 확인
-                        if (isAlreadyProcessed(messageKey)) {
-                            Log.d(TAG, "🔄 Skip duplicate message from external: " + topic);
-                            return;
-                        }
-
-                        Log.d(TAG, "📨 External→internal (genuine external message): " + topic + " (" + (mqttMessage.getPayload() != null ? mqttMessage.getPayload().length : 0) + " bytes)");
-                        forwardToInternal(topic, mqttMessage.getPayload());
-                    }
-
-                    @Override public void deliveryComplete(IMqttDeliveryToken token) { /* not used */ }
-                });
-
-                inboundClient.connect(options);
-                // 모든 토픽을 받음 (#은 모든 토픽을 의미)
-                inboundClient.subscribe("#", 1);
-
-                // 기존 inbound 클라이언트 정리 후 교체
-                MqttClient old = externalConnections.put("inbound", inboundClient);
-                if (old != null) {
-                    try { if (old.isConnected()) old.disconnect(); old.close(); } catch (Exception ignored) {}
-                }
-
-                Log.i(TAG, "✅ External→internal bridge ready - receiving ALL topics (#)");
-            } catch (Exception e) {
-                Log.e(TAG, "❌ Failed to start external→internal bridge", e);
-            }
-        }).start();
+    private String mapDownlinkToInternal(String downlinkTopic) {
+        if (downlinkTopic == null) return "";
+        return downlinkTopic.replaceFirst("^downlink/", "");
     }
 
     private void forwardToInternal(String topic, byte[] payload) {
-        // 중복 메시지 방지 체크
         String messageKey = generateMessageKey(topic, payload);
         if (isAlreadyProcessed(messageKey)) {
             Log.d(TAG, "🔄 Skip duplicate message to internal: " + topic);
@@ -393,16 +488,13 @@ public class MqttGatewayService extends Service {
         }
         try {
             if (payload == null) payload = new byte[0];
-
             Message msg = new Message(topic, payload);
-            Log.d(TAG, "📤 Forwarding to internal broker: " + topic + " (" + payload.length + " bytes)");
             messagingService.publish(msg);
-            Log.i(TAG, "📡 ✅ Forwarded to internal broker: " + topic);
+            Log.i(TAG, "📡 ← internal(downlink): " + topic);
         } catch (Exception e) {
             Log.e(TAG, "❌ Failed to forward to internal: " + topic, e);
         }
     }
-
     public void stop() {
         Log.i(TAG, "🛑 Stopping MQTT Gateway Service");
         for (MqttClient client : externalConnections.values()) {

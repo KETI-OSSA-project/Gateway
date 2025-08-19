@@ -1,19 +1,120 @@
 <?xml version="1.0" encoding="utf-8"?>
-<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
-    android:id="@+id/main"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    tools:context=".MainActivity">
+    android:padding="16dp">
 
-    <TextView
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Hello World!"
-        app:layout_constraintBottom_toBottomOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:orientation="vertical">
 
-</androidx.constraintlayout.widget.ConstraintLayout>
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="MQTT Gateway 설정"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:layout_marginBottom="24dp" />
+
+        <!-- 외부 브로커 설정 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="외부 브로커 URL"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/editBrokerUrl"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="예: tcp://192.168.0.6:1883"
+            android:inputType="textUri"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Uplink 패턴 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Uplink 패턴 (내부→외부)"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/editUplinkPattern"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="예: app/+/out"
+            android:layout_marginBottom="16dp" />
+
+        <!-- Downlink 패턴 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Downlink 패턴 (외부→내부 구독)"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/editDownlinkPattern"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="예: downlink/app/+/in"
+            android:layout_marginBottom="16dp" />
+
+        <!-- 내부 허용 패턴 -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="내부 허용 패턴 (선택사항)"
+            android:textStyle="bold"
+            android:layout_marginBottom="8dp" />
+
+        <EditText
+            android:id="@+id/editInternalAllow"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="예: app/+/out (비어두면 모든 내부 메시지 허용)"
+            android:layout_marginBottom="24dp" />
+
+        <!-- 버튼들 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center">
+
+            <Button
+                android:id="@+id/btnStart"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="시작"
+                android:layout_marginEnd="8dp" />
+
+            <Button
+                android:id="@+id/btnStop"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="정지"
+                android:layout_marginStart="8dp" />
+
+        </LinearLayout>
+
+        <!-- 상태 표시 -->
+        <TextView
+            android:id="@+id/textStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="대기 중..."
+            android:textSize="16sp"
+            android:gravity="center"
+            android:layout_marginTop="24dp"
+            android:padding="16dp"
+            android:background="#f0f0f0" />
+
+    </LinearLayout>
+</ScrollView>
