@@ -18,7 +18,6 @@ public class MainActivity extends AppCompatActivity {
     private EditText editBrokerUrl;
     private EditText editUplinkPattern;
     private EditText editDownlinkPattern;
-    private EditText editInternalAllow;
     private Button btnStart;
     private Button btnStop;
     private TextView textStatus;
@@ -42,7 +41,6 @@ public class MainActivity extends AppCompatActivity {
         editBrokerUrl = findViewById(R.id.editBrokerUrl);
         editUplinkPattern = findViewById(R.id.editUplinkPattern);
         editDownlinkPattern = findViewById(R.id.editDownlinkPattern);
-        editInternalAllow = findViewById(R.id.editInternalAllow);
         btnStart = findViewById(R.id.btnStart);
         btnStop = findViewById(R.id.btnStop);
         textStatus = findViewById(R.id.textStatus);
@@ -53,9 +51,8 @@ public class MainActivity extends AppCompatActivity {
     private void loadSettings() {
         // 기본값으로 설정 로드
         editBrokerUrl.setText(prefs.getString("brokerUrl", "tcp://192.168.0.6:1883"));
-        editUplinkPattern.setText(prefs.getString("uplinkPattern", "app/+/out"));
+        editUplinkPattern.setText(prefs.getString("uplinkPattern", "uplink/app/+/out"));
         editDownlinkPattern.setText(prefs.getString("downlinkPattern", "downlink/app/+/in"));
-        editInternalAllow.setText(prefs.getString("internalAllow", "app/+/out"));
 
         updateStatus("설정 로드 완료");
     }
@@ -81,7 +78,6 @@ public class MainActivity extends AppCompatActivity {
         intent.putExtra("brokerUrl", editBrokerUrl.getText().toString().trim());
         intent.putExtra("uplinkPattern", editUplinkPattern.getText().toString().trim());
         intent.putExtra("downlinkPattern", editDownlinkPattern.getText().toString().trim());
-        intent.putExtra("internalAllow", editInternalAllow.getText().toString().trim());
 
         startService(intent);
         isServiceRunning = true;
@@ -134,7 +130,6 @@ public class MainActivity extends AppCompatActivity {
         editor.putString("brokerUrl", editBrokerUrl.getText().toString().trim());
         editor.putString("uplinkPattern", editUplinkPattern.getText().toString().trim());
         editor.putString("downlinkPattern", editDownlinkPattern.getText().toString().trim());
-        editor.putString("internalAllow", editInternalAllow.getText().toString().trim());
         editor.apply();
 
         Toast.makeText(this, "설정이 저장되었습니다", Toast.LENGTH_SHORT).show();

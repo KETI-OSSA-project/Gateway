@@ -64,14 +64,12 @@ public class MqttGatewayService extends Service {
     // ===== 설정 모델 도입 =====
     private static class GatewayConfig {
         String externalBrokerUrl;
-        String uplinkPattern;
-        String downlinkPattern;
-        String internalOutAllow;
+        String uplinkPattern;        // 내부→외부 허용 패턴 (필터링 + 매핑용)
+        String downlinkPattern;      // 외부→내부 구독 패턴
 
         // 패턴 캐싱
         private Pattern compiledUplinkPattern;
         private Pattern compiledDownlinkPattern;
-        private Pattern compiledInternalOutPattern;
 
         void compilePatterns() {
             if (uplinkPattern != null) {
@@ -79,9 +77,6 @@ public class MqttGatewayService extends Service {
             }
             if (downlinkPattern != null) {
                 compiledDownlinkPattern = compileTopicPattern(downlinkPattern);
-            }
-            if (internalOutAllow != null) {
-                compiledInternalOutPattern = compileTopicPattern(internalOutAllow);
             }
         }
 
@@ -136,25 +131,24 @@ public class MqttGatewayService extends Service {
             newConfig.externalBrokerUrl = intent.getStringExtra("brokerUrl");
             newConfig.uplinkPattern = intent.getStringExtra("uplinkPattern");
             newConfig.downlinkPattern = intent.getStringExtra("downlinkPattern");
-            newConfig.internalOutAllow = intent.getStringExtra("internalAllow");
-
-            // 빈 문자열을 null로 변환
-            if (newConfig.internalOutAllow != null && newConfig.internalOutAllow.trim().isEmpty()) {
-                newConfig.internalOutAllow = null;
-            }
 
             newConfig.compilePatterns();
 
-            // 설정이 변경되었으면 적용
-            if (!configEquals(config, newConfig)) {
-                Log.i(TAG, "🔧 설정 변경 감지, 재적용");
-                config = newConfig;
-                saveConfigToPreferences(config);
+            // 항상 설정을 적용 (기존 설정과 다를 때만이 아니라)
+            Log.i(TAG, "🔧 UI에서 설정 받음, 강제 적용");
+            Log.i(TAG, "🔧 새 설정: uplink=" + newConfig.uplinkPattern);
+            config = newConfig;
+            saveConfigToPreferences(config);
 
-                if (isConnected) {
-                    applyConfig(config);
-                }
+            if (isConnected) {
+                // 게이트웨이 리스너를 다시 등록 (새로운 설정으로)
+                registerGatewayListener();
+                applyConfig(config);
             }
+        } else {
+            // Intent에 설정이 없으면 기존 설정 다시 로드
+            Log.i(TAG, "🔧 Intent에 설정 없음, 기존 설정 재로드");
+            config = loadConfigFromPreferences();
         }
 
         return START_STICKY;
@@ -184,16 +178,16 @@ public class MqttGatewayService extends Service {
     private GatewayConfig loadConfigFromPreferences() {
         android.content.SharedPreferences prefs = getSharedPreferences("GatewayConfig", MODE_PRIVATE);
 
+        // 디버깅: 저장된 모든 값 출력
+        Log.d(TAG, "🔍 저장된 설정값들:");
+        Log.d(TAG, "  brokerUrl: " + prefs.getString("brokerUrl", "없음"));
+        Log.d(TAG, "  uplinkPattern: " + prefs.getString("uplinkPattern", "없음"));
+        Log.d(TAG, "  downlinkPattern: " + prefs.getString("downlinkPattern", "없음"));
+
         GatewayConfig cfg = new GatewayConfig();
         cfg.externalBrokerUrl = prefs.getString("brokerUrl", EXTERNAL_BROKER_URL);
-        cfg.uplinkPattern = prefs.getString("uplinkPattern", "app/+/out");
+        cfg.uplinkPattern = prefs.getString("uplinkPattern", "uplink/app/+/out");
         cfg.downlinkPattern = prefs.getString("downlinkPattern", "downlink/app/+/in");
-        cfg.internalOutAllow = prefs.getString("internalAllow", "app/+/out");
-
-        // 빈 문자열을 null로 변환
-        if (cfg.internalOutAllow != null && cfg.internalOutAllow.trim().isEmpty()) {
-            cfg.internalOutAllow = null;
-        }
 
         cfg.compilePatterns();
         Log.i(TAG, "📋 설정 로드: " + cfg.externalBrokerUrl + ", uplink=" + cfg.uplinkPattern + ", downlink=" + cfg.downlinkPattern);
@@ -205,7 +199,6 @@ public class MqttGatewayService extends Service {
         editor.putString("brokerUrl", cfg.externalBrokerUrl);
         editor.putString("uplinkPattern", cfg.uplinkPattern);
         editor.putString("downlinkPattern", cfg.downlinkPattern);
-        editor.putString("internalAllow", cfg.internalOutAllow != null ? cfg.internalOutAllow : "");
         editor.apply();
     }
 
@@ -213,8 +206,7 @@ public class MqttGatewayService extends Service {
         if (a == null || b == null) return false;
         return java.util.Objects.equals(a.externalBrokerUrl, b.externalBrokerUrl) &&
                java.util.Objects.equals(a.uplinkPattern, b.uplinkPattern) &&
-               java.util.Objects.equals(a.downlinkPattern, b.downlinkPattern) &&
-               java.util.Objects.equals(a.internalOutAllow, b.internalOutAllow);
+               java.util.Objects.equals(a.downlinkPattern, b.downlinkPattern);
     }
 
     // ===== 설정 적용 =====
@@ -405,12 +397,20 @@ public class MqttGatewayService extends Service {
                     String topic = message.getTopic();
                     if (topic == null) return;
 
-                    if (config.compiledInternalOutPattern != null &&
-                        !topicMatches(config.compiledInternalOutPattern, topic)) {
+                    // 디버깅용 로그 추가
+                    Log.d(TAG, "🔍 받은 내부 토픽: " + topic);
+                    Log.d(TAG, "🔍 내부 허용 패턴: " + config.uplinkPattern);
+                    Log.d(TAG, "🔍 패턴 컴파일됨: " + (config.compiledUplinkPattern != null));
+
+                    if (config.compiledUplinkPattern != null &&
+                        !topicMatches(config.compiledUplinkPattern, topic)) {
                         Log.d(TAG, "skip internal(not allowed): " + topic);
                         return;
                     }
+
+                    Log.d(TAG, "✅ 내부 토픽 허용됨: " + topic);
                     String outTopic = mapInternalToUplink(topic);
+                    Log.d(TAG, "🔄 매핑된 외부 토픽: " + outTopic);
                     forwardToExternal(outTopic, message.getPayload());
                 }
             };
@@ -454,16 +454,32 @@ public class MqttGatewayService extends Service {
     }
 
     private String mapInternalToUplink(String internalTopic) {
+        // UI에서 설정한 패턴에 따라 동적 매핑
         if (config.compiledUplinkPattern == null ||
             !topicMatches(config.compiledUplinkPattern, internalTopic)) {
-            return internalTopic;
+            return internalTopic; // 패턴 불일치 시 그대로
         }
-        return internalTopic.replaceFirst("^app/", "uplink/app/");
+
+        // 간단한 접두어 교체 (더 정교한 매핑 필요 시 확장 가능)
+        // 예: uplink/app/+/out 패턴이면 그대로, app/+/out 패턴이면 uplink/ 추가
+        if (config.uplinkPattern != null && config.uplinkPattern.toLowerCase().startsWith("uplink/")) {
+            return internalTopic; // 이미 uplink로 시작하는 패턴이면 그대로
+        } else {
+            // uplink/ 접두어 추가
+            return "uplink/" + internalTopic;
+        }
     }
 
     private String mapDownlinkToInternal(String downlinkTopic) {
         if (downlinkTopic == null) return "";
-        return downlinkTopic.replaceFirst("^downlink/", "");
+
+        // UI에서 설정한 downlink 패턴에 따라 동적 매핑
+        if (config.downlinkPattern != null && config.downlinkPattern.toLowerCase().startsWith("downlink/")) {
+            return downlinkTopic.replaceFirst("^[Dd]ownlink/", "");
+        } else {
+            // downlink/ 접두어가 없는 패턴이면 그대로
+            return downlinkTopic;
+        }
     }
 
     private void forwardToInternal(String topic, byte[] payload) {
