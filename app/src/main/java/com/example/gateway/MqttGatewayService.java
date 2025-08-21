@@ -36,10 +36,8 @@ import java.util.concurrent.Executors;
 
 public class MqttGatewayService extends Service {
     private static final String TAG = "GATEWAY";
-
-    // 재연결
-    private static final long RECONNECT_DELAY = 5000L; // 5초
-    private static final long MAX_RECONNECT_DELAY = 60000L; // 최대 60초
+    private static final long RECONNECT_DELAY = 5000L;
+    private static final long MAX_RECONNECT_DELAY = 60000L;
     private static final int MAX_CACHE_SIZE = 1000;
 
     private int uplinkReconnectAttempts = 0;
@@ -50,14 +48,15 @@ public class MqttGatewayService extends Service {
     private boolean isConnected = false;
 
     private Handler reconnectHandler;
-    private final Map<String, MqttClient> externalConnections = new ConcurrentHashMap<>();      // uplink, downlink 클라이언트 보관
-    private final ExecutorService connectionExecutor = Executors.newFixedThreadPool(2);// 스레드 풀 두개
-    private final Set<String> processedMessages = ConcurrentHashMap.newKeySet();                // 이미 처리한 메시지 키 저장
+    private final Map<String, MqttClient> externalConnections = new ConcurrentHashMap<>();
+    private final ExecutorService connectionExecutor = Executors.newFixedThreadPool(2);
+    private final Set<String> processedMessages = ConcurrentHashMap.newKeySet();
 
+    // gateway 기본 설정
     private static class GatewayConfig {
         String externalBrokerUrl;
-        String uplinkPattern;        // 내부→외부 허용 패턴 (필터링 + 매핑용)
-        String downlinkPattern;      // 외부→내부 구독 패턴
+        String uplinkPattern;
+        String downlinkPattern;
 
 
         private Pattern compiledUplinkPattern;
@@ -71,7 +70,6 @@ public class MqttGatewayService extends Service {
             }
         }
 
-        // 토픽 정규식으로 내부 규칙에 맞게 컴파일하기
         private Pattern compileTopicPattern(String pattern) {
             String regex = "^" + pattern.replace(".", "\\.").replace("+", "[^/]+") + "$";
             return Pattern.compile(regex);
@@ -83,9 +81,7 @@ public class MqttGatewayService extends Service {
     public void onCreate() {
         super.onCreate();
         reconnectHandler = new Handler(Looper.getMainLooper());
-        Log.d(TAG, "MqttGatewayService created");
-
-        startForegroundServiceWithNotification();   // 게이트웨이 포그라운드로 승격 -> 자꾸 죽는 에러 때문에
+        startForegroundServiceWithNotification();
         config = loadConfigFromPreferences();
         connectToBrokerService();
     }
@@ -94,7 +90,6 @@ public class MqttGatewayService extends Service {
         final String channelId = "gateway_service_channel";
         final String channelName = "Gateway Service Channel";
 
-        // 알림 채널 만드는 것이 필수 -> 포그라운드 서비스 일환
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel =
                     new NotificationChannel(channelId, channelName, NotificationManager.IMPORTANCE_DEFAULT);
@@ -110,15 +105,13 @@ public class MqttGatewayService extends Service {
         startForeground(1, notification);
     }
 
-    // 서비스 실행할때마다 호출
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        Log.d(TAG, "MqttGatewayService started");
+        Log.d(TAG, "게이트웨이 서비스 시작");
 
-        // 중복 메시지 캐시 클리어 명령어 처리
         if (intent != null && intent.getBooleanExtra("clearCache", false)) {
             processedMessages.clear();
-            Log.i(TAG, "🧹 Message cache cleared manually");
+            Log.i(TAG, "캐시 청소");
             return START_STICKY;
         }
 
@@ -131,22 +124,19 @@ public class MqttGatewayService extends Service {
 
             newConfig.compilePatterns();
 
-            // 항상 설정을 적용 (기존 설정과 다를 때만이 아니라)
-            Log.i(TAG, "🔧 새 설정: uplink=" + newConfig.uplinkPattern + ", downlink=" + newConfig.downlinkPattern );
+            Log.i(TAG, "새 설정: uplink=" + newConfig.uplinkPattern + ", downlink=" + newConfig.downlinkPattern );
             config = newConfig;
             saveConfigToPreferences(config);
 
             if (isConnected) {
-                // 게이트웨이 리스너를 다시 등록 (새로운 설정으로)
                 registerGatewayListener();
                 applyConfig(config);
             }
         } else {
             // Intent에 설정이 없으면 기존 설정 다시 로드
-            Log.i(TAG, "🔧 Intent에 설정 없음, 기존 설정 재로드");
+            Log.i(TAG, "기존 설정 재로드");
             config = loadConfigFromPreferences();
         }
-
         return START_STICKY;
     }
 
@@ -169,7 +159,6 @@ public class MqttGatewayService extends Service {
         }
     }
 
-    // 내부 패턴 설정하는 부분
     private GatewayConfig loadConfigFromPreferences() {
         android.content.SharedPreferences prefs = getSharedPreferences("GatewayConfig", MODE_PRIVATE);
 
@@ -197,7 +186,6 @@ public class MqttGatewayService extends Service {
                java.util.Objects.equals(a.downlinkPattern, b.downlinkPattern);
     }
 
-    // 한번에 한 스레드만 접근하도록 동기화 -> 동시에 같이 못하게 함
     private synchronized void applyConfig(GatewayConfig cfg) {
         Log.i(TAG, "🔧 Applying config");
         teardownExternalConnections();
@@ -214,15 +202,14 @@ public class MqttGatewayService extends Service {
 
     // 내부 -> 외부 (uplink)
     private void connectExternalForUplink(GatewayConfig cfg) {
-        // 선언 부분에서 만든 스레드풀 객체 사용
         connectionExecutor.execute(() -> {
             try {
                 String id = "AndroidGateway_Uplink_" + System.currentTimeMillis();
-                Log.d(TAG, "🌐 Connecting uplink: " + cfg.externalBrokerUrl);
+                Log.d(TAG, "uplink 클라이언트 연결");
                 MqttClient up = new MqttClient(cfg.externalBrokerUrl, id, new MemoryPersistence());
                 MqttConnectOptions opt = new MqttConnectOptions();
                 opt.setAutomaticReconnect(true);
-                opt.setCleanSession(true);  // 연결이 끊기면 이전 구독 정보들은 브로커가 다 버림
+                opt.setCleanSession(true);
                 opt.setKeepAliveInterval(30);
                 opt.setConnectionTimeout(10);
                 up.setCallback(new MqttCallback() {
@@ -230,18 +217,17 @@ public class MqttGatewayService extends Service {
                         Log.w(TAG, "❌ Uplink lost", cause);
                         scheduleUplinkReconnect();
                     }
-                    // uplink는 발신만해서 수신은 필요없음
                     @Override public void messageArrived(String topic, MqttMessage message) { /* publish-only */ }
-                    @Override public void deliveryComplete(IMqttDeliveryToken token) { }    // 안쓰고 있음
+                    @Override public void deliveryComplete(IMqttDeliveryToken token) { }
                 });
-                // 외부 브로커에 연결
+
                 up.connect(opt);
-                MqttClient old = externalConnections.put("uplink", up); // 기존 연결 객체 생성
-                if (old != null) { try { if (old.isConnected()) old.disconnect(); old.close(); } catch (Exception ignored) {} } // 기존 연결 있으면 걔 없애기
-                uplinkReconnectAttempts = 0; // 성공 시 리셋
+                MqttClient old = externalConnections.put("uplink", up);
+                if (old != null) { try { if (old.isConnected()) old.disconnect(); old.close(); } catch (Exception ignored) {} }
+                uplinkReconnectAttempts = 0;
                 Log.i(TAG, "Uplink 연결 성공");
             } catch (Exception e) {
-                Log.e(TAG, "❌ Uplink 연결 안됨", e);
+                Log.e(TAG, "Uplink 연결 안됨", e);
                 scheduleUplinkReconnect();
             }
         });
@@ -251,7 +237,7 @@ public class MqttGatewayService extends Service {
         connectionExecutor.execute(() -> {
             try {
                 String id = "AndroidGateway_Downlink_" + System.currentTimeMillis();
-                Log.d(TAG, "🌐 Connecting downlink: " + cfg.externalBrokerUrl);
+                Log.d(TAG, "downlink 클라이언트 연결");
                 MqttClient down = new MqttClient(cfg.externalBrokerUrl, id, new MemoryPersistence());
                 MqttConnectOptions opt = new MqttConnectOptions();
                 opt.setAutomaticReconnect(true);
@@ -260,7 +246,7 @@ public class MqttGatewayService extends Service {
                 opt.setConnectionTimeout(10);
                 down.setCallback(new MqttCallback() {
                     @Override public void connectionLost(Throwable cause) {
-                        Log.w(TAG, "❌ Downlink lost", cause);
+                        Log.w(TAG, "Downlink 끊김", cause);
                         scheduleDownlinkReconnect();
                     }
                     // downlink는 수신만 하기 때문에 토픽 매칭 알고리즘이 필요함
@@ -278,7 +264,7 @@ public class MqttGatewayService extends Service {
                 down.subscribe(config.downlinkPattern, 1);
                 MqttClient old = externalConnections.put("downlink", down);
                 if (old != null) { try { if (old.isConnected()) old.disconnect(); old.close(); } catch (Exception ignored) {} }
-                downlinkReconnectAttempts = 0; // 성공 시 리셋
+                downlinkReconnectAttempts = 0;
                 Log.i(TAG, "✅ Downlink connected & subscribed: " + config.downlinkPattern);
             } catch (Exception e) {
                 Log.e(TAG, "❌ Downlink connect failed", e);
@@ -292,7 +278,6 @@ public class MqttGatewayService extends Service {
         if (reconnectHandler == null) return;
         long delay = Math.min(RECONNECT_DELAY * (1L << uplinkReconnectAttempts), MAX_RECONNECT_DELAY);
         uplinkReconnectAttempts++;
-        Log.d(TAG, "⏳ Scheduling uplink reconnect in " + delay + "ms (attempt " + uplinkReconnectAttempts + ")");
         reconnectHandler.postDelayed(() -> {
             MqttClient c = externalConnections.get("uplink");
             if (c == null || !c.isConnected()) connectExternalForUplink(config);
@@ -303,7 +288,6 @@ public class MqttGatewayService extends Service {
         if (reconnectHandler == null) return;
         long delay = Math.min(RECONNECT_DELAY * (1L << downlinkReconnectAttempts), MAX_RECONNECT_DELAY);
         downlinkReconnectAttempts++;
-        Log.d(TAG, "⏳ Scheduling downlink reconnect in " + delay + "ms (attempt " + downlinkReconnectAttempts + ")");
         reconnectHandler.postDelayed(() -> {
             MqttClient c = externalConnections.get("downlink");
             if (c == null || !c.isConnected()) connectExternalForDownlink(config);
@@ -314,44 +298,38 @@ public class MqttGatewayService extends Service {
     private void connectToBrokerService() {
         if (isConnected) return;
 
-        Log.d(TAG, "🔗 Connecting to broker service...");
-
         brokerConnection = new ServiceConnection() {
             @Override public void onServiceConnected(ComponentName name, IBinder service) {
-                Log.i(TAG, "✅ Broker service connected");
+                Log.i(TAG, "내부 브로커와 연결됨");
                 messagingService = IMessagingService.Stub.asInterface(service);
                 isConnected = true;
-
-                // 내부→외부 시작
                 registerGatewayListener();
-
-                // 외부→내부 시작
-                applyConfig(config);       // uplink / downlink 연결
+                applyConfig(config);       // uplink & downlink 연결
             }
 
             @Override public void onServiceDisconnected(ComponentName name) {
-                Log.w(TAG, "❌ Broker service disconnected");
+                Log.w(TAG, "내부 브로커와 끊김d");
                 messagingService = null;
                 isConnected = false;
                 scheduleReconnect();
             }
         };
 
+        // ipc 통신 -> 바인딩하는 부분 (추후 내부 브로커 주소 바뀌면 수정 필요)
         Intent brokerIntent = new Intent();
         brokerIntent.setComponent(new ComponentName("com.example.broker", "com.example.broker.MessagingService"));
         boolean bound = bindService(brokerIntent, brokerConnection, BIND_AUTO_CREATE);
         if (!bound) {
-            Log.e(TAG, "Failed to bind to broker service");
+            Log.e(TAG, "브로커와 연결하는 데 실패");
             scheduleReconnect();
         }
     }
 
     private void scheduleReconnect() {
         if (reconnectHandler == null) return;
-        Log.d(TAG, "⏳ Scheduling reconnect in " + RECONNECT_DELAY + "ms");
         reconnectHandler.postDelayed(() -> {
             if (!isConnected) {
-                Log.d(TAG, "🔄 Attempting to reconnect to broker service...");
+                Log.d(TAG, "재연결 시도");
                 connectToBrokerService();
             }
         }, RECONNECT_DELAY);
@@ -359,7 +337,6 @@ public class MqttGatewayService extends Service {
 
     // 루프 방지..
     private String generateMessageKey(String topic, byte[] payload) {
-        // 토픽 + 페이로드 해시로 고유 키 생성
         String payloadHash = String.valueOf(java.util.Arrays.hashCode(payload));
         return topic + ":" + payloadHash;
     }
@@ -369,17 +346,15 @@ public class MqttGatewayService extends Service {
             return true;
         }
 
-        // 캐시 크기 제한
         if (processedMessages.size() >= MAX_CACHE_SIZE) {
             processedMessages.clear();
-            Log.d(TAG, "🧹 Cleared message cache (reached max size)");
+            Log.d(TAG, "캐시 청소");
         }
 
         processedMessages.add(messageKey);
         return false;
     }
 
-    // 허용할 패턴 설정하는 부부누
     private void registerGatewayListener() {
         if (messagingService == null) return;
         try {
@@ -392,22 +367,19 @@ public class MqttGatewayService extends Service {
 
                     // downlink에서 들어온 토픽은 다시 외부로 보내지 않음 (우선 체크)
                     if (isDownlinkMappedTopic(topic)) {
-                        Log.d(TAG, "✅ downlink로 들어온 토픽은 외부로 발행 안함(내부용): " + topic);
+                        Log.d(TAG, "downlink로 들어온 토픽은 외부로 발행 안함(내부용): " + topic);
                         return;
                     }
 
-                    Log.d(TAG, "🔍 내부 허용 패턴 (uplink): " + config.uplinkPattern);
-
-                    // uplink 패턴과 일치하는 내부 메시지만 외부로 전달
                     if (config.compiledUplinkPattern != null &&
                         !topicMatches(config.compiledUplinkPattern, topic)) {
-                        Log.d(TAG, "skip internal(not allowed): " + topic);
+                        Log.d(TAG, "매칭안됨" + topic);
                         return;
                     }
 
-                    Log.d(TAG, "✅ 내부 토픽 허용됨 (uplink): " + topic);
+                    Log.d(TAG, "내부 토픽 허용: " + topic);
                     String outTopic = mapInternalToUplink(topic);
-                    Log.d(TAG, "🔄 매핑된 외부 토픽: " + outTopic);
+                    Log.d(TAG, "외부 토픽: " + outTopic);
                     forwardToExternal(outTopic, message.getPayload());
                 }
             };
@@ -420,31 +392,24 @@ public class MqttGatewayService extends Service {
         }
     }
 
-    // downlink에서 들어온 토픽인지 확인
     private boolean isDownlinkMappedTopic(String topic) {
         if (config.downlinkPattern == null || topic == null) {
-            Log.d(TAG, "🔍 isDownlinkMappedTopic: null check failed - downlinkPattern=" + config.downlinkPattern + ", topic=" + topic);
             return false;
         }
 
-        Log.d(TAG, "🔍 downlinkPattern: " + config.downlinkPattern);
-        Log.d(TAG, "🔍 checking topic: " + topic);
-
-        // downlink 패턴과 직접 일치하는지 확인 (매핑 제거했으므로)
         boolean matches = topicMatches(config.compiledDownlinkPattern, topic);
-        Log.d(TAG, "🔍 pattern match result: " + matches);
+        Log.d(TAG, "패턴 매칭 결과: " + matches);
 
         return matches;
     }
 
-    // mqtt와 게이트웨이 간 통신 담당하는 코드
     private void forwardToExternal(String topic, byte[] payload) {
         String messageKey = generateMessageKey(topic, payload);
         if (isAlreadyProcessed(messageKey)) return;
 
         MqttClient client = externalConnections.get("uplink");
         if (client == null || !client.isConnected()) {
-            Log.w(TAG, "uplink not connected: " + topic);
+            Log.w(TAG, "uplink 클라이언트 유실");
             return;
         }
         try {
@@ -452,74 +417,47 @@ public class MqttGatewayService extends Service {
             MqttMessage out = new MqttMessage(payload);
             out.setQos(1); out.setRetained(false);
             client.publish(topic, out);
-            Log.i(TAG, "📡 → external(uplink): " + topic);
+            Log.i(TAG, "외부로 발신: " + topic);
         } catch (Exception e) {
-            Log.e(TAG, "forwardToExternal error: " + topic, e);
+            Log.e(TAG, "에러 발생", e);
         }
     }
 
-    // ===== 토픽 유틸 (패턴 캐싱 버전) =====
     private boolean topicMatches(Pattern compiledPattern, String topic) {
         if (compiledPattern == null || topic == null) return false;
         return compiledPattern.matcher(topic).matches();
     }
 
     private String mapInternalToUplink(String internalTopic) {
-        // UI에서 설정한 패턴에 따라 동적 매핑
-        if (config.compiledUplinkPattern == null ||
-            !topicMatches(config.compiledUplinkPattern, internalTopic)) {
-            return internalTopic; // 패턴 불일치 시 그대로
-        }
-
-        if (config.uplinkPattern != null && config.uplinkPattern.toLowerCase().startsWith("uplink/")) {
-            return internalTopic; // 이미 uplink로 시작하는 패턴이면 그대로
-        } else {
-            // uplink/ 접두어 추가
-            return "uplink/" + internalTopic;
-        }
+        if (internalTopic == null) return "";
+        return internalTopic;
     }
 
     private String mapDownlinkToInternal(String downlinkTopic) {
         if (downlinkTopic == null) return "";
-
         return downlinkTopic;
     }
 
     private void forwardToInternal(String topic, byte[] payload) {
         String messageKey = generateMessageKey(topic, payload);
-        Log.d(TAG, "🔍 forwardToInternal - messageKey: " + messageKey);
-        Log.d(TAG, "🔍 processedMessages contains: " + processedMessages.contains(messageKey));
 
+        // 루프(중복) 방지: uplink, downlik가 같은 경우
         if (isAlreadyProcessed(messageKey)) {
-            Log.d(TAG, "🔄 Skip duplicate message to internal: " + topic);
+            Log.d(TAG, "중복은 건너뜀");
             return;
         }
 
-
         if (messagingService == null) {
-            Log.w(TAG, "⚠️ Cannot forward to internal - messaging service not available");
+            Log.w(TAG, "브로커가 실행이 안됨");
             return;
         }
         try {
             if (payload == null) payload = new byte[0];
             Message msg = new Message(topic, payload);
             messagingService.publish(msg);
-            Log.i(TAG, "📡 ← internal(downlink): " + topic);
+            Log.i(TAG, "외부에서 발신: " + topic);
         } catch (Exception e) {
-            Log.e(TAG, "❌ Failed to forward to internal: " + topic, e);
+            Log.e(TAG, "외부에서 발신 실패", e);
         }
-    }
-    public void stop() {
-        Log.i(TAG, "🛑 Stopping MQTT Gateway Service");
-        for (MqttClient client : externalConnections.values()) {
-            try {
-                if (client.isConnected()) client.disconnect();
-                client.close();
-            } catch (Exception e) {
-                Log.e(TAG, "Error disconnecting external client", e);
-            }
-        }
-        externalConnections.clear();
-        Log.d(TAG, "Gateway service stopped");
     }
 }
