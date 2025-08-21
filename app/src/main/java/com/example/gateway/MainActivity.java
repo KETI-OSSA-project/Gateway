@@ -30,7 +30,7 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        Log.d(TAG, "🚀 Gateway MainActivity 시작");
+        Log.d(TAG, "Gateway MainActivity 시작");
 
         initViews();
         loadSettings();
@@ -49,7 +49,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void loadSettings() {
-        // 기본값으로 설정 로드
+        // 기본값
         editBrokerUrl.setText(prefs.getString("brokerUrl", "tcp://192.168.0.6:1883"));
         editUplinkPattern.setText(prefs.getString("uplinkPattern", "uplink/app/+/out"));
         editDownlinkPattern.setText(prefs.getString("downlinkPattern", "downlink/app/+/in"));
@@ -84,7 +84,7 @@ public class MainActivity extends AppCompatActivity {
         updateButtons();
         updateStatus("Gateway 서비스 시작됨");
 
-        Log.d(TAG, "✅ Gateway 서비스 시작 요청");
+        Log.d(TAG, "Gateway 서비스 시작 요청");
     }
 
     private void stopGatewayService() {
@@ -94,7 +94,7 @@ public class MainActivity extends AppCompatActivity {
         updateButtons();
         updateStatus("Gateway 서비스 정지됨");
 
-        Log.d(TAG, "🛑 Gateway 서비스 정지 요청");
+        Log.d(TAG, "Gateway 서비스 정지 요청");
     }
 
     private boolean validateInputs() {
