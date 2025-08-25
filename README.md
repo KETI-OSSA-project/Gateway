@@ -69,5 +69,3 @@ gateway/
 3. 외부 Subscriber → 메시지 수신 확인
 
 ---
-
-정수인님, 제가 이어서 **Publisher, Subscriber, Broker 레포**도 같은 톤으로 맞춰 드릴까요?
