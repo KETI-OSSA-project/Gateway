@@ -28,8 +28,27 @@ Uplink/Downlink 토픽 규칙을 기반으로, 내부 메시지를 외부로 전
 
 ---
 
-## 📂 디렉토리 구조
+## Demo
+### 내부 ↔ 내부 통신
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/5fda5904-9d37-4324-8dae-87ddd36bc08a" width="40%" />
+</p>
 
+### 내부 ↔ 외부 통신
+<table>
+<tr>
+    <td><img src="https://github.com/user-attachments/assets/3372b3b6-22df-4a4c-b832-d55950039a4c" alt="uplink-broker"></td>
+    <td><img src="https://github.com/user-attachments/assets/e029e60a-968f-4e0d-9743-4cc5d612e071" alt="downlink-subscriber"></td>
+</tr>
+</table>
+<p align="center">
+  <a href="https://drive.google.com/file/d/1_TukQ0CwD708QUjqD8ZCfM2t8XZdoEBp/view?usp=drive_link">
+    <b>📽️ MQTT Demo</b>
+  </a>
+</p>
+
+
+## 📂 디렉토리 구조
 ```
 gateway/
 ├─ app/
@@ -89,3 +108,7 @@ gateway/
 3. 외부 Subscriber → 메시지 수신 확인
 
 ---
+## Acknowledgement
+**개발 및 유지 관리 기관** : 한국전자기술연구원(KETI)
+
+※ 본 연구는 2025년도 정부(과학기술정보통신부)의 재원으로 정보통신기획평가원의 지원을 받아 수행된 연구임(No. RS-2024-00394190, 온-디바이스 자율보호가 내재화된 개방형 영상보안플랫폼 기술 개발).
