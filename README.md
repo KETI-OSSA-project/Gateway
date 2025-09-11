@@ -21,7 +21,8 @@
 
 </div>
 
-**개요**
+## 개요
+
 Gateway 모듈은 **내부 Broker**와 **외부 MQTT Broker(Mosquitto)** 사이의 메시지 중계 역할을 담당합니다.
 Uplink/Downlink 토픽 규칙을 기반으로, 내부 메시지를 외부로 전달하거나 외부 메시지를 내부로 전달하는 기능을 제공합니다.
 
