@@ -58,9 +58,10 @@ gateway/
 
 ### 게이트웨이 설정
 
-* **외부 MQTT Broker URL** : `tcp://192.168.0.10:1883`
+* **외부 MQTT Broker URL** : `tcp://외부 브로커 url`
 * **Uplink Topic Pattern** : `uplink/#`
 * **Downlink Topic Pattern** : `downlink/#`
+-> 토픽 패턴은 사용자 설정이 가능합니다.
 
 ### 실행 흐름
 
