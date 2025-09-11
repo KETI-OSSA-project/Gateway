@@ -2,6 +2,24 @@
 ---
 
 # Azena Messaging Gateway
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/d15b5f1f-2052-4b2e-b914-270107ee7431" alt="<프로젝트명> Banner" width="70%" />
+</p>
+
+<p align="center">
+  <b>Validate and integrate MQTT messaging services and brokers with a unified tool.</b>
+</p>
+
+<div align="center">
+
+  <!-- 윗줄: Android 관련 2개 -->
+  <img src="https://img.shields.io/badge/Android_Studio-Koala-3DDC84?logo=androidstudio&logoColor=white" />
+  <img src="https://img.shields.io/badge/Android-12_(API_32)-3DDC84?logo=android&logoColor=white" />
+  <!-- 아랫줄: 나머지 3개 -->
+  <img src="https://img.shields.io/badge/Java-11-007396?logo=openjdk&logoColor=white" />
+  <img src="https://img.shields.io/badge/Mosquitto-2.0.22-3C5280?logo=eclipseide&logoColor=white" />
+
+</div>
 
 **개요**
 Gateway 모듈은 **내부 Broker**와 **외부 MQTT Broker(Mosquitto)** 사이의 메시지 중계 역할을 담당합니다.
