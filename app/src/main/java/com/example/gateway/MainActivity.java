@@ -108,7 +108,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (!brokerUrl.startsWith("tcp://") && !brokerUrl.startsWith("ssl://")) {
-            editBrokerUrl.setError("올바른 URL 형식이 아닙니다 (tcp:// 또는 ssl://)");
+            editBrokerUrl.setError("올바른 URL 형식이 아닙니다");
             return false;
         }
 

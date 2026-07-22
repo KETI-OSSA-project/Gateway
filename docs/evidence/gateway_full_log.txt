@@ -1,0 +1,12 @@
+﻿--------- beginning of main
+07-22 06:32:41.082  3718  3718 I GATEWAY : ✅ 내장 브로커 기동 성공: 0.0.0.0:1883 리슨
+07-22 06:32:41.083  3718  3718 I GATEWAY : 📋 설정 로드: tcp://192.168.1.30:1883, uplink=uplink/app/+/out, downlink=downlink/app/+/in
+07-22 06:32:41.087  3718  3718 I GATEWAY : 새 설정: uplink=uplink/app/+/out, downlink=downlink/app/+/in
+07-22 06:32:41.092  3718  3718 I GATEWAY : 내부 브로커와 연결됨
+07-22 06:32:41.094  3718  3718 I GATEWAY : ✅ Gateway listener registered
+07-22 06:32:41.094  3718  3718 I GATEWAY : 🔧 Applying config
+07-22 06:32:41.475  3718  3795 I GATEWAY : Uplink 연결 성공
+07-22 06:32:41.796  3718  3795 I GATEWAY : ✅ Downlink connected: downlink/app/+/in
+07-22 06:32:41.808  3718  3806 I GATEWAY : ✅ Downlink subscribed (reconnect=false): downlink/app/+/in
+07-22 06:33:03.554  3718  3806 I GATEWAY : 외부에서 발신: downlink/app/2/in
+07-22 06:40:34.559  3718  3733 I GATEWAY : 외부로 발신: uplink/app/1/out
