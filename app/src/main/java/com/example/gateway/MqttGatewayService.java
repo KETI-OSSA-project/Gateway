@@ -426,11 +426,12 @@ public class MqttGatewayService extends Service {
                         return;
                     }
 
-//                    if (config.compiledUplinkPattern != null &&
-//                        !topicMatches(config.compiledUplinkPattern, topic)) {
-//                        Log.d(TAG, "매칭안됨" + topic);
-//                        return;
-//                    }
+                    // uplink 패턴(기본 uplink/app/+/out)에 맞는 토픽만 밖으로. 07-22 내장 브로커 작업 때 주석 처리돼 모든 내부 토픽이 나가던 것을 되돌림
+                    if (config.compiledUplinkPattern != null &&
+                        !topicMatches(config.compiledUplinkPattern, topic)) {
+                        Log.d(TAG, "매칭안됨" + topic);
+                        return;
+                    }
 
                     Log.d(TAG, "토픽 패턴: " + topic);
                     String outTopic = mapInternalToUplink(topic);
